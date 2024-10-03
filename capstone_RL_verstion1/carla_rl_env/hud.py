@@ -142,7 +142,7 @@ class MapImage(object):
         hash_func.update(opendrive_content.encode("UTF-8"))
         opendrive_hash = str(hash_func.hexdigest())
 
-        # Build path for saving or loading the cached rendered map
+        # Build path for saving or loading the cached rendered map -> Use cache
         filename = carla_map.name.split('/')[-1] + "_" + opendrive_hash + ".tga"
         dirname = os.path.join("cache", "no_rendering_mode")
         full_path = str(os.path.join(dirname, filename))
@@ -335,11 +335,7 @@ class MapImage(object):
             for marking in last_markings:
                 markings_list.append(marking)
 
-            # Once the lane markings have been simplified to Solid or Broken lines, we draw them
 
-            # markings[0] : solid,broken... type
-            # markings[1] : color
-            # markings[2] : waypoint list
             for markings in markings_list:
                 if markings[0] == carla.LaneMarkingType.Solid:
                     draw_solid_line(surface, markings[1], False, markings[2], 2)

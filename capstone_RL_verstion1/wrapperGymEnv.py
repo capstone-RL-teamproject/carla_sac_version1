@@ -26,26 +26,14 @@ class WrappedGymEnv(gym.Wrapper):
     def reset(self):
 
         reset_output = self.env.reset()
-        img_np = reset_output['front_camera']
-        img_pil = Image.fromarray(img_np)
-        img_pil_resized = img_pil.resize((self.height,self.width))
-        img_np_resized = np.uint8(img_pil_resized)
-        src_img_1 = np.transpose(img_np_resized,[2,1,0])
 
-        img_np = reset_output['lidar_image']
-        img_pil = Image.fromarray(img_np)
-        img_pil_resized = img_pil.resize((self.height,self.width))
-        img_np_resized = np.uint8(img_pil_resized)
-        src_img_2 = np.transpose(img_np_resized,[2,1,0])
-        src_img = np.concatenate((src_img_1, src_img_2), axis=0)
-
-        img_np = reset_output['bev']
+        img_np = reset_output['hud']
         img_pil = Image.fromarray(img_np)
         img_pil_resized = img_pil.resize((self.height,self.width))
         img_np_resized = np.uint8(img_pil_resized)
         tgt_img = np.transpose(img_np_resized,[2,0,1])
 
-        wpsh = reset_output['wp_hrz']
+
 
         return tgt_img
 
@@ -56,33 +44,21 @@ class WrappedGymEnv(gym.Wrapper):
         else:
             throttle = 0
             brake = np.clip(-action[0],0.0,1.0)
-        act_list = ([throttle, brake, action[1]],[False])
+        act_tuple = ([throttle, brake, action[1]],[False]) # Tuple(Box,Discret)
 
         for _ in range(self.action_repeat):
-            re = self.env.step(act_list)
+            re = self.env.step(act_tuple)
 
         re=list(re)
 
-        img_np = re[0]['front_camera']
-        img_pil = Image.fromarray(img_np)
-        img_pil_resized = img_pil.resize((self.height,self.width))
-        img_np_resized = np.uint8(img_pil_resized)
-        src_img_1 = np.transpose(img_np_resized,[2,1,0])
 
-        img_np = re[0]['lidar_image']
-        img_pil = Image.fromarray(img_np)
-        img_pil_resized = img_pil.resize((self.height,self.width))
-        img_np_resized = np.uint8(img_pil_resized)
-        src_img_2 = np.transpose(img_np_resized,[2,1,0])
-        src_img = np.concatenate((src_img_1, src_img_2), axis=0)
-
-        img_np = re[0]['bev']
+        img_np = re[0]['hud']
         img_pil = Image.fromarray(img_np)
         img_pil_resized = img_pil.resize((self.height,self.width))
         img_np_resized = np.uint8(img_pil_resized)
         tgt_img = np.transpose(img_np_resized,[2,0,1])
 
-        wpsh = re[0]['wp_hrz']
+
 
 
 

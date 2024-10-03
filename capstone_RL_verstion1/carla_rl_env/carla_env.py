@@ -18,7 +18,7 @@ SAC algorithm for CARLA ENV
 
 
 
-# 센서들 데이터와   bev surface, bev surface global 모두  오프셋 만큼 격자로 렌더링 함
+# 센서들 데이터와   hud surface, hud surface global 모두  오프셋 만큼 격자로 렌더링 함
 class DisplayManager:
     def __init__(self, grid_size, window_size, display_sensor):
         pygame.init()
@@ -35,7 +35,7 @@ class DisplayManager:
         self.grid_size = grid_size
         self.window_size = window_size
         self.sensor_list = []
-        self.bev = None  # bev is short for bird eye view
+        self.hud = None
 
     def get_window_size(self):
         return [int(self.window_size[0]), int(self.window_size[1])]
@@ -53,8 +53,8 @@ class DisplayManager:
     def get_sensor_list(self):
         return self.sensor_list
 
-    def add_birdeyeview(self, bev):
-        self.bev = bev
+    def add_birdeyeview(self, hud):
+        self.hud = hud
 
     def render(self):
         # 사용하는 sensor offset 간격만큼 위치 정해서 display한다
@@ -62,13 +62,13 @@ class DisplayManager:
             if s.surface is not None:
                 self.display.blit(s.surface, self.get_display_offset(s.display_pos))
 
-        # bev surface display
+        # surface display
         """
         surface : 로컬뷰 담고 있는 surface (차량 화면 중심)
         surface_global : 전체 맵을 보여주는 글로벌 뷰 
         """
-        self.display.blit(self.bev.surface, self.get_display_offset(self.bev.display_pos))
-        self.display.blit(self.bev.surface_global, self.get_display_offset(self.bev.display_pos_global))
+        self.display.blit(self.hud.surface, self.get_display_offset(self.hud.display_pos))
+        self.display.blit(self.hud.surface_global, self.get_display_offset(self.hud.display_pos_global))
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -78,7 +78,7 @@ class DisplayManager:
 
     def clear(self):
         self.sensor_list = []
-        self.bev = None
+        self.hud = None
 
 
 
@@ -162,7 +162,7 @@ class CarlaRlEnv(gym.Env):
         self.display_size = self.display_manager.get_display_size()
         self.vehicle_list = []
         self.sensor_list = []
-        self.bev = None
+        self.hud = None
         self.pedestrian_list = []
         self.pedestrian_controller_list = []
 
@@ -194,7 +194,7 @@ class CarlaRlEnv(gym.Env):
 
             'lidar_image': Box(0, 255, shape=(self.display_size[0],self.display_size[1], 3), dtype=np.uint8),
 
-            'bev': Box(0, 255, shape=(self.display_size[0], self.display_size[1], 3), dtype=np.uint8),
+            'hud': Box(0, 255, shape=(self.display_size[0], self.display_size[1], 3), dtype=np.uint8),
             'trgt_pos': Box(-np.inf, np.inf, shape=(3,), dtype=np.float32),
             'wp_hrz': Box(-np.inf, np.inf, shape=(40, 2), dtype=np.float32)
         })
@@ -208,10 +208,7 @@ class CarlaRlEnv(gym.Env):
         trn = action[0][2]
         rvs = action[1][0]
 
-        # print("acc",acc)
-        # print("brk",brk)
-        # print("trn",trn)
-        # print("rvs",rvs)
+
 
         act = carla.VehicleControl(throttle=float(acc), steer=float(trn), brake=float(brk), reverse=bool(rvs))
 
@@ -221,7 +218,7 @@ class CarlaRlEnv(gym.Env):
 
         reward, done, cost = self.deal_with_reward_and_done()
 
-        self.bev.update_HUD()
+        self.hud.update_HUD()
 
         transform = self.ego_vehicle.get_transform()
         transform.location.z += 10
@@ -232,7 +229,7 @@ class CarlaRlEnv(gym.Env):
         observation = {
             'front_camera': self.front_camera.measure_data if self.front_camera is not None else np.zeros(img_size),
             'lidar_image': self.lidar.measure_data if self.lidar is not None else np.zeros(img_size),
-            'bev': self.bev.measure_data,
+            'hud': self.hud.measure_data,
             'trgt_pos': self.target_pos.measure_data,
             'wp_hrz': self.waypoints_horizon,
         }
@@ -257,7 +254,7 @@ class CarlaRlEnv(gym.Env):
         observation = {
             'front_camera': self.front_camera.measure_data if self.front_camera is not None else np.zeros(img_size),
             'lidar_image': self.lidar.measure_data if self.lidar is not None else np.zeros(img_size),
-            'bev': self.bev.measure_data,
+            'hud': self.hud.measure_data,
             'trgt_pos': self.target_pos.measure_data,
             'wp_hrz': self.waypoints_horizon,
         }
@@ -365,12 +362,6 @@ class CarlaRlEnv(gym.Env):
             self.done = True
             lane_invasion_cost = 1.0
 
-        # traffic light
-        # if self.ego_vehicle.is_at_traffic_light():
-        #    self.done = True
-        #    cross_red_light_reward = -1.0
-        # else:
-        #    cross_red_light_reward = 0.0
 
         # speed limit
         current_velocity = self.ego_vehicle.get_velocity()
@@ -408,12 +399,6 @@ class CarlaRlEnv(gym.Env):
         else:
             speed_reward = v_long
 
-        # print("------------------------------------------")
-        # print("current_velocity.x",current_velocity.x)
-        # print("current_speed_limit",current_speed_limit)
-        # print("v_long",v_long)
-        # print("speed_reward",speed_reward)
-        # print("------------------------------------------")
 
         steer_reward = -self.ego_vehicle.get_control().steer ** 2
         lat_acc_reward = - abs(self.ego_vehicle.get_control().steer) * v_long ** 2
@@ -485,7 +470,7 @@ class CarlaRlEnv(gym.Env):
 
 
 
-        self.bev = HUD(self.world,
+        self.hud = HUD(self.world,
                        PIXELS_PER_METER,
                        PIXELS_AHEAD_VEHICLE,
                        self.display_size, [2, 0], [2, 2],
@@ -493,7 +478,7 @@ class CarlaRlEnv(gym.Env):
                        self.target_pos.transform,
                        self.waypoints)
 
-        self.display_manager.add_birdeyeview(self.bev)
+        self.display_manager.add_birdeyeview(self.hud)
 
         self.collision = SensorManager(self.world, 'Collision',
                                        carla.Transform(), self.ego_vehicle, {}, None, None)
@@ -595,9 +580,9 @@ class CarlaRlEnv(gym.Env):
         self.pedestrian_list = []
         time.sleep(0.1)
 
-        if self.bev is not None:
-            self.bev.destroy()
-            del self.bev
+        if self.hud is not None:
+            self.hud.destroy()
+            del self.hud
 
         self.display_manager.clear()
 
