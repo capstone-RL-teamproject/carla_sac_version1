@@ -80,7 +80,7 @@ def main():
         'carla_port': 2000,
         'map_name': 'Town10HD',
         'window_resolution': [1080, 1080],
-        'grid_size': [3, 3],
+        'grid_size': [2, 2],
         'sync': True,
         'no_render': False,
         'display_sensor': True,

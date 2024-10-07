@@ -511,8 +511,8 @@ class MapImage(object):
 
 
 class HUD(object):
-    def __init__(self,world,pixels_per_meter,pixels_ahead_vehicle,display_size,display_pos,display_pos_global,lead_actor,target_transform,waypoints=None):
-
+    def __init__(self,world,pixels_per_meter,pixels_ahead_vehicle,display_size,display_pos,display_pos_global,lead_actor,target_transform,waypoints=None, parent=None):
+        self.parent = parent
         self.world = world
         self.pixels_per_meter = pixels_per_meter
         self.pixels_ahead_vehicle = pixels_ahead_vehicle

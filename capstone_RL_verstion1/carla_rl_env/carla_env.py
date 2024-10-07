@@ -415,8 +415,10 @@ class CarlaRlEnv(gym.Env):
 
         return self.reward, self.done, self.cost
 
-    def create_all_actors(self):
-        self.target_pos = TargetPosition(carla.Transform(carla.Location(-114.23, 53.82, 0.6), carla.Rotation(0.0, 90.0, 0.0))) # 지도에서 목표지점 위치 알아내서 이곳에 넘겨야함
+    def create_all_actors(self, x=-114.23, y=53.82, z=0.6):
+        # self.target_pos = TargetPosition(carla.Transform(carla.Location(-114.23, 53.82, 0.6), carla.Rotation(0.0, 90.0, 0.0))) # 지도에서 목표지점 위치 알아내서 이곳에 넘겨야함
+        self.target_pos = TargetPosition(carla.Transform(carla.Location(x, y, z), carla.Rotation(0.0, 90.0, 0.0))) # 지도에서 목표지점 위치 알아내서 이곳에 넘겨야함
+
         #self.target_pos.set_transform(random.choice(self.spawn_points))
 
         # create ego vehicle
@@ -429,6 +431,10 @@ class CarlaRlEnv(gym.Env):
         #    time.sleep(0.1)
 
         while self.ego_vehicle is None:
+            # x = float(input("Enter X: "))
+            # y = float(input("Enter y: "))
+            # z = float(input("Enter Z: "))
+            # self.ego_vehicle = self.world.try_spawn_actor(ego_vehicle_bp, carla.Transform(carla.Location(x, y, z), carla.Rotation(0.0, -180.0, 0.0)))
             self.ego_vehicle = self.world.try_spawn_actor(ego_vehicle_bp, carla.Transform(carla.Location(-18.386, 130.21, 0.546),carla.Rotation(0.0, -180.0, 0.0)))
             # time.sleep(0.1)
 
@@ -453,7 +459,7 @@ class CarlaRlEnv(gym.Env):
                                               carla.Transform(carla.Location(x=0, z=bbe_z + 1.4), carla.Rotation(yaw=+00)),
                                               self.ego_vehicle,
                                               {},
-                                              self.display_size, [0, 1])
+                                              self.display_size, [0, 0])
             self.sensor_list.append(self.front_camera)
             self.display_manager.add_sensor(self.front_camera)
 
@@ -464,7 +470,7 @@ class CarlaRlEnv(gym.Env):
                                        self.ego_vehicle,
                                        {'channels': '64', 'range': '25.0',
                                         'points_per_second': '250000', 'rotation_frequency': '20'},
-                                       self.display_size, [1, 0])
+                                       self.display_size, [0, 1])
             self.sensor_list.append(self.lidar)
             self.display_manager.add_sensor(self.lidar)
 
@@ -473,7 +479,7 @@ class CarlaRlEnv(gym.Env):
         self.hud = HUD(self.world,
                        PIXELS_PER_METER,
                        PIXELS_AHEAD_VEHICLE,
-                       self.display_size, [2, 0], [2, 2],
+                       self.display_size, [1, 0], [1, 1],
                        self.ego_vehicle,
                        self.target_pos.transform,
                        self.waypoints)
