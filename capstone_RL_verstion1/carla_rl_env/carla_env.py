@@ -243,7 +243,13 @@ class CarlaRlEnv(gym.Env):
 
         self.remove_all_actors()
         self.world.tick()
+
         self.create_all_actors()
+        # selected_pos = self.chooseStartPos()
+        # if(selected_pos == None):
+        #     self.create_all_actors()   
+        # else:
+        #     self.create_all_actors(selected_pos.x, selected_pos.y, selected_pos.z)
         self.world.tick()
 
         self.reward = 0.0
@@ -414,6 +420,44 @@ class CarlaRlEnv(gym.Env):
         self.cost = 200.0 * collision_cost + 10.0 * lane_invasion_cost
 
         return self.reward, self.done, self.cost
+    
+    def choose_target_pos(self):
+        selected_pos = None
+
+        # 미니맵에서 마우스 클릭 이벤트 처리
+        while selected_pos is None:
+            for event in pygame.event.get():
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    # 마우스 클릭 위치 가져오기
+                    mouse_pos = pygame.mouse.get_pos()
+                    
+                    # 월드 좌표로 변환 (미니맵의 비율에 따라 조정 필요)
+                    world_pos = self.pixel_to_world(mouse_pos)
+                    
+                    # 선택된 위치를 반환
+                    selected_pos = carla.Location(world_pos[0], world_pos[1], 0.6)  # z 좌표는 임의로 설정
+
+                    # 마우스 좌표를 화면에 출력해 확인
+                    print(f"Mouse clicked at: {mouse_pos}, converted to world: {world_pos}")
+
+        return selected_pos
+
+    def pixel_to_world(self, pixel_pos): # 여기 수정해서 알맞은 미니맵 위치로 가도록 해야함_1007
+        # 미니맵에서 픽셀 위치를 실제 월드 위치로 변환하는 함수
+        # 이때 비율을 맞추는 것이 중요 (미니맵의 크기와 월드 크기)
+        # 미니맵과 월드 좌표계의 스케일을 적절히 설정해야 함
+        minimap_size = self.hud.surface_global.get_size()  # 미니맵의 크기
+        world_width = 200  # 실제 월드의 너비 (예시)
+        world_height = 200  # 실제 월드의 높이 (예시)
+
+        # 미니맵 좌표를 월드 좌표로 변환
+        scale_x = world_width / minimap_size[0]
+        scale_y = world_height / minimap_size[1]
+
+        world_x = pixel_pos[0] * scale_x
+        world_y = pixel_pos[1] * scale_y
+
+        return (world_x, world_y)
 
     def create_all_actors(self, x=-114.23, y=53.82, z=0.6):
         # self.target_pos = TargetPosition(carla.Transform(carla.Location(-114.23, 53.82, 0.6), carla.Rotation(0.0, 90.0, 0.0))) # 지도에서 목표지점 위치 알아내서 이곳에 넘겨야함
@@ -453,7 +497,7 @@ class CarlaRlEnv(gym.Env):
 
 
         # future work : more camera , gnss, imu sensor , radar
-
+        # 각 hud 위치 설정
         if 'front_rgb' in self.sensors_to_amount:
             self.front_camera = SensorManager(self.world, 'RGBCamera',
                                               carla.Transform(carla.Location(x=0, z=bbe_z + 1.4), carla.Rotation(yaw=+00)),
@@ -501,6 +545,40 @@ class CarlaRlEnv(gym.Env):
         transform.location.z += 50  # 10
         transform.rotation.pitch -= 90
         self.spectator.set_transform(transform)
+
+        # 여기부터 추가된 동작들
+        # 원래 코드에서 차량 설정을 마친 후에 hud 설정이 들어가기 때문에 순서를 조정하거나 이렇게 추가 동작으로 할 수밖에 없음
+        self.sensor_list = []
+        selectedPos = self.choose_target_pos()
+        new_location = carla.Location(x=selectedPos.x, y=selectedPos.y, z=selectedPos.z)
+        self.ego_vehicle.set_location(new_location)
+
+        self.hud = HUD(self.world,
+                       PIXELS_PER_METER,
+                       PIXELS_AHEAD_VEHICLE,
+                       self.display_size, [1, 0], [1, 1],
+                       self.ego_vehicle,
+                       self.target_pos.transform,
+                       self.waypoints)
+
+        self.display_manager.add_birdeyeview(self.hud)
+
+        self.collision = SensorManager(self.world, 'Collision',
+                                       carla.Transform(), self.ego_vehicle, {}, None, None)
+
+        self.sensor_list.append(self.collision)
+
+        self.lane_invasion = SensorManager(self.world, 'Lane_invasion',
+                                           carla.Transform(), self.ego_vehicle, {}, None, None)
+
+        self.sensor_list.append(self.lane_invasion)
+
+
+        transform = self.ego_vehicle.get_transform()
+        transform.location.z += 50  # 10
+        transform.rotation.pitch -= 90
+        self.spectator.set_transform(transform)
+        # 여기까지
 
         # create other vehicles
         vehicle_bps = self.world.get_blueprint_library().filter('vehicle.*')
