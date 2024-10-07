@@ -9,6 +9,7 @@ from SAC_for_carla_v2.sac import SAC
 from SAC_for_carla_v2.PER import PER_Buffer
 from SAC_for_carla_v2.utils import *
 import gym
+import ray  
 
 FLAG=True# 삭제해야하는 코드
 
@@ -125,6 +126,10 @@ def main():
     actor_lr_scheduler = LinearSchedule(args.lr_decay_steps, args.lr_init, args.lr_end)
     critic_lr_scheduler = LinearSchedule(args.lr_decay_steps, args.lr_init, args.lr_end)
 
+    ray.init(address='auto')  # 중앙 서버에 연결
+
+    parameter_server = ray.get_actor("ParameterServer")
+
     # load the model
     if args.Loadmodel:
         policy.load(f"./models/{file_name}")
@@ -230,6 +235,9 @@ def main():
                     policy.save(f"./models/{file_name}")
                     print('writer add scalar and save model   ', 'steps: {}k'.format(int(t / 1000)), 'AVG reward:',int(avg_reward),'AVG cost:',int(avg_cost))
                     t = t + 1
+                    #10 episode 후 서버로 weight 값 보내기
+                    #parameter_server.add_weights.remote(model_weights)
+                    #print(" Weights sent to the central server.")
 
         print(f"\n--------timestep : {t} reward : {episode_reward}  cost : {episode_cost}--------\n")
 
