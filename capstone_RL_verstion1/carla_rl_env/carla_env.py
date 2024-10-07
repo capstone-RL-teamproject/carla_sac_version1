@@ -4,6 +4,7 @@ import pygame
 import random
 import time
 import gym
+import socket
 from gym.spaces import Dict, Discrete, Box, Tuple
 import carla
 from carla_rl_env.hud import HUD,PIXELS_PER_METER,PIXELS_AHEAD_VEHICLE
@@ -149,8 +150,12 @@ class CarlaRlEnv(gym.Env):
             settings.no_rendering_mode = True
             self.world.apply_settings(settings)
 
+        self.traffic_port = 8000
         if self.sync:
-            traffic_manager = self.client.get_trafficmanager(8000) # actor,traffic manage
+            # 포트 8000을 기본으로 시도
+            self.traffic_port = self.get_available_port(self.traffic_port)
+            traffic_manager = self.client.get_trafficmanager(self.traffic_port)
+            print(f"Using traffic manager on port {self.traffic_port}")
             settings = self.world.get_settings()
             traffic_manager.set_synchronous_mode(True)
             settings.synchronous_mode = True
@@ -199,6 +204,19 @@ class CarlaRlEnv(gym.Env):
             'wp_hrz': Box(-np.inf, np.inf, shape=(40, 2), dtype=np.float32)
         })
 
+    def is_port_in_use(self, port):
+        # 소켓을 사용하여 포트가 사용 중인지 확인
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(('localhost', port)) == 0
+
+    def get_available_port(self, start_port=8000, max_port=8100):
+        port = start_port
+        while port <= max_port:
+            if not self.is_port_in_use(port):
+                return port
+            port += 2
+        raise Exception("No available ports found in the specified range")
+
     def step(self, action):
         self.current_step += 1
         self.total_step += 1
@@ -207,8 +225,6 @@ class CarlaRlEnv(gym.Env):
         brk = action[0][1]
         trn = action[0][2]
         rvs = action[1][0]
-
-
 
         act = carla.VehicleControl(throttle=float(acc), steer=float(trn), brake=float(brk), reverse=bool(rvs))
 
@@ -509,7 +525,7 @@ class CarlaRlEnv(gym.Env):
             while vehicle_tmp_ref is None:
                 vehicle_tmp_ref = self.world.try_spawn_actor(random.choice(vehicle_bps_4wheel), random.choice(self.spawn_points))
 
-            vehicle_tmp_ref.set_autopilot()
+            vehicle_tmp_ref.set_autopilot(True, self.traffic_port)
             self.vehicle_list.append(vehicle_tmp_ref)
 
         # create pedestrians

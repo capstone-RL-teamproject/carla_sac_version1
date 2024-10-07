@@ -62,6 +62,8 @@ def main():
 
     parser.add_argument('--Loadmodel', type=bool, default=False,help='Load pretrained model or Not')  # 훈련 마치고 나서는 True로 설정 하기
 
+    parser.add_argument('--port_num', type=int, default=2000, help='Port num')  # 훈련 마치고 나서는 True로 설정 하기
+
     args = parser.parse_args()
 
     file_name = f"{args.policy}_{args.env}_{args.seed}"
@@ -77,7 +79,7 @@ def main():
 
     # carla env parameter
     params = {
-        'carla_port': 2000,
+        'carla_port': args.port_num,
         'map_name': 'Town10HD',
         'window_resolution': [1080, 1080],
         'grid_size': [3, 3],
