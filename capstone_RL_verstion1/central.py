@@ -28,20 +28,22 @@ class ParameterServer:
         return averaged_weights
 
 # ParameterServer Actor 생성
-parameter_server = ParameterServer.remote()
+central_server = ParameterServer.remote()
 
 # 통합 및 업데이트 예시 (다른 스크립트에서 호출 가능)
 def integrate_and_update():
     # 파라미터 통합 요청
-    integrated_weights = ray.get(parameter_server.integrate_parameters.remote())
+    integrated_weights = ray.get(central_server.integrate_parameters.remote())
     if integrated_weights:
         print("Integrated weights have been updated.")
-    else:
-        print("No weights to integrate.")
+    #else:
+        #print("No weights to integrate.")
 
 # 계속 실행되도록 유지
 if __name__ == "__main__":
     print("Central server is ready to collect parameters...")
+    print("Current actors:", ray.state.actors())
     while True:
         # 통합 및 업데이트를 필요에 따라 호출
+
         integrate_and_update()

@@ -127,8 +127,14 @@ def main():
     critic_lr_scheduler = LinearSchedule(args.lr_decay_steps, args.lr_init, args.lr_end)
 
     ray.init(address='auto')  # 중앙 서버에 연결
+    print("Current actors:", ray.state.actors())
 
-    parameter_server = ray.get_actor("ParameterServer")
+    try:
+        parameter_server = ray.get_actor("ParameterServer")
+    except ValueError:
+        print("ParameterServer actor does not exist. Please ensure it is created.")
+        return
+
 
     # load the model
     if args.Loadmodel:
