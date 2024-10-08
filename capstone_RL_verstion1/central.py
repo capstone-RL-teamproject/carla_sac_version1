@@ -1,8 +1,8 @@
 import ray
 import numpy as np
 
-# Ray 초기화
-ray.init()
+# Ray 초기화 (공유 네임스페이스 지정)
+ray.init(namespace="parameter_server_namespace")
 
 # 통합을 담당하는 Actor 정의
 @ray.remote
@@ -13,7 +13,7 @@ class ParameterServer:
     def add_weights(self, weights):
         # 워커로부터 받은 파라미터를 저장
         self.collected_weights.append(weights)
-    
+        
     def integrate_parameters(self):
         # 수집된 파라미터가 있다면 통합 수행
         if not self.collected_weights:
@@ -27,8 +27,9 @@ class ParameterServer:
         self.collected_weights = []
         return averaged_weights
 
-# ParameterServer Actor 생성
-central_server = ParameterServer.remote()
+# ParameterServer Actor 생성 (이름과 수명 지정)
+central_server = ParameterServer.options(
+    name="ParameterServer", lifetime="detached").remote()
 
 # 통합 및 업데이트 예시 (다른 스크립트에서 호출 가능)
 def integrate_and_update():
@@ -36,14 +37,10 @@ def integrate_and_update():
     integrated_weights = ray.get(central_server.integrate_parameters.remote())
     if integrated_weights:
         print("Integrated weights have been updated.")
-    #else:
-        #print("No weights to integrate.")
 
 # 계속 실행되도록 유지
 if __name__ == "__main__":
     print("Central server is ready to collect parameters...")
-    print("Current actors:", ray.state.actors())
+    print("Current actors:", ray.util.list_named_actors())
     while True:
-        # 통합 및 업데이트를 필요에 따라 호출
-
         integrate_and_update()

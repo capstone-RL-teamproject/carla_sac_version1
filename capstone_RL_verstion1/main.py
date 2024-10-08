@@ -63,7 +63,7 @@ def main():
 
     parser.add_argument('--Loadmodel', type=bool, default=False,help='Load pretrained model or Not')  # 훈련 마치고 나서는 True로 설정 하기
 
-    parser.add_argument('--port_num', type=int, default=2000, help='Port num')  # 훈련 마치고 나서는 True로 설정 하기
+    parser.add_argument('--port_num', type=int, default=3000, help='Port num')  # 훈련 마치고 나서는 True로 설정 하기
 
     args = parser.parse_args()
 
@@ -126,8 +126,11 @@ def main():
     actor_lr_scheduler = LinearSchedule(args.lr_decay_steps, args.lr_init, args.lr_end)
     critic_lr_scheduler = LinearSchedule(args.lr_decay_steps, args.lr_init, args.lr_end)
 
-    ray.init(address='auto')  # 중앙 서버에 연결
-    print("Current actors:", ray.state.actors())
+    # Ray 초기화 (동일한 네임스페이스 지정)
+    ray.init(address='auto', namespace="parameter_server_namespace")
+
+    # 현재 액터 목록 확인
+    print("Current actors:", ray.util.list_named_actors())
 
     try:
         parameter_server = ray.get_actor("ParameterServer")
