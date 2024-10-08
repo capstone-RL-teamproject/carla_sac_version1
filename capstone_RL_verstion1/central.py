@@ -22,6 +22,7 @@ class ParameterServer:
         averaged_weights = {}
         for key in self.collected_weights[0].keys():
             averaged_weights[key] = np.mean([w[key] for w in self.collected_weights], axis=0)
+            print(f"{key}: {averaged_weights[key]}")
 
         # 통합 완료 후 초기화
         self.collected_weights = []

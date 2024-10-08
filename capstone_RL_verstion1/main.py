@@ -58,7 +58,7 @@ def main():
     parser.add_argument('--lr_decay_steps', type=float, default=int(1e6), help='Learning rate decay steps')
     parser.add_argument('--write', type=bool, default=True, help='summary T/F')
 
-
+    parser.add_argument("--update_freq", default=10, type=int)  # How often we update central model
     parser.add_argument("--eval_freq", default=1e3, type=int)  # How often (time steps) we evaluate 1e3
 
     parser.add_argument('--Loadmodel', type=bool, default=False,help='Load pretrained model or Not')  # 훈련 마치고 나서는 True로 설정 하기
@@ -126,7 +126,7 @@ def main():
     actor_lr_scheduler = LinearSchedule(args.lr_decay_steps, args.lr_init, args.lr_end)
     critic_lr_scheduler = LinearSchedule(args.lr_decay_steps, args.lr_init, args.lr_end)
 
-    # Ray 초기화 (동일한 네임스페이스 지정)
+    # Ray 초기화
     ray.init(address='auto', namespace="parameter_server_namespace")
 
     # 현재 액터 목록 확인
@@ -167,7 +167,6 @@ def main():
 
 
                 else:
-
                     action = policy.select_action(state, random_sample=False)
                     #print(f"select action: {action} and shape is {action.shape}\n\n")
 
@@ -244,9 +243,15 @@ def main():
                     policy.save(f"./models/{file_name}")
                     print('writer add scalar and save model   ', 'steps: {}k'.format(int(t / 1000)), 'AVG reward:',int(avg_reward),'AVG cost:',int(avg_cost))
                     t = t + 1
-                    #10 episode 후 서버로 weight 값 보내기
-                    #parameter_server.add_weights.remote(model_weights)
-                    #print(" Weights sent to the central server.")
+                    
+            #10 episode 후 서버로 weight 값 보내기
+            if (t + 1) % args.update_freq == 0:
+                weights = {}
+                for name, param in policy.actor.named_parameters():
+                    weights[name] = param.detach().cpu().numpy()
+
+                parameter_server.add_weights.remote(weights)
+                print(" Weights sent to the central server.")
 
         print(f"\n--------timestep : {t} reward : {episode_reward}  cost : {episode_cost}--------\n")
 
