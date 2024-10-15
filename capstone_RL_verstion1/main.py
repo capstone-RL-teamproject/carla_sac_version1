@@ -9,13 +9,151 @@ from SAC_for_carla_v2.sac import SAC
 from SAC_for_carla_v2.PER import PER_Buffer
 from SAC_for_carla_v2.utils import *
 import gym
-import ray  
+import ray
 
 FLAG=True# 삭제해야하는 코드
 
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-print("\nDevice is ",device)
-print()
+@ray.remote
+class Worker:
+    def __init__(self, worker_id, _params, _args, file_name, port, traffic_port):
+        from gym.envs.registration import register
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print("\nDevice is ", device)
+        print()
+
+        register(
+            id='CarlaRlEnv-v0',
+            entry_point='carla_rl_env.carla_env:CarlaRlEnv',
+            max_episode_steps=1000,
+        )
+
+        self.id = worker_id
+
+        self.args = _args
+        self.params = _params
+        self.args.port = port
+        self.args.traffic_port = traffic_port
+        self.params['carla_port'] = port
+        self.params['traffic_port'] = traffic_port
+
+        self.env = WrappedGymEnv(gym.make("CarlaRlEnv-v0", params=self.params), self.args)
+
+        self.writer = SummaryWriter(log_dir=f"./results/{file_name}")
+        self.args.summary_writer = self.writer
+
+        self.args.action_shape = self.env.action_space.shape[0]
+        self.args.action_scale = self.env.action_scale
+        self.args.action_bias = self.env.action_bias
+
+        # Set seeds
+        self.env.action_space.seed(self.args.seed)
+        torch.manual_seed(self.args.seed)
+        np.random.seed(self.args.seed)
+
+        print(self.args)
+
+        self.policy = SAC(self.args, device)
+        self.buffer = PER_Buffer(self.args, device=device)
+
+        self.BETA = self.args.beta_init
+        self.BUFFER_ALPHA = 0.6
+
+        self.beta_scheduler = LinearSchedule(self.args.beta_gain_steps, self.args.beta_init, 1.0)
+        self.buffer_alpha_scheduler = adaptiveSchedule(self.args.alpha_max, self.args.alpha_min)
+
+        self.actor_lr_scheduler = LinearSchedule(self.args.lr_decay_steps, self.args.lr_init, self.args.lr_end)
+        self.critic_lr_scheduler = LinearSchedule(self.args.lr_decay_steps, self.args.lr_init, self.args.lr_end)
+
+        # Load the model if needed
+        if self.args.Loadmodel:
+            self.policy.load(f"./models/{file_name}")
+
+    def train(self):
+        FLAG = True  # 삭제해야하는 코드
+
+        for t in range(int(self.args.max_timesteps)):
+
+            state = self.env.reset()
+
+            done = False
+            episode_reward = 0
+            episode_cost = 0
+
+            while True:
+                if not self.args.Loadmodel and t < self.args.start_timesteps:
+                    action = self.policy.select_action(state, random_sample=True)
+                else:
+                    action = self.policy.select_action(state, random_sample=False)
+
+                # Perform action
+                next_state, reward, done, info = self.env.step(action)
+                self.env.display()
+                cost = info['cost']  # collision & invasion cost
+
+                experience = Experience(state, action, reward, next_state, done)
+                self.buffer.add(experience)
+
+                if done:
+                    print(f"done after {t+1} steps done is {done}")
+                    break
+
+                # Train policy
+                if self.policy.has_enough_experience(self.buffer) and t > self.args.start_timesteps:
+                    self.policy.train(self.BETA, self.BUFFER_ALPHA, self.buffer)
+                    self.BETA = self.beta_scheduler.value(t)
+                    td_mean = np.mean(self.buffer.buffer[:len(self.buffer)]["priority"])
+                    td_std = np.std(self.buffer.buffer[:len(self.buffer)]["priority"])
+                    self.BUFFER_ALPHA = self.buffer_alpha_scheduler.value(td_mean, td_std)
+
+                    if FLAG:
+                        print(f"\ntimestep {t} train start beta {self.BETA} td_mean {td_mean} td std {td_std} buffer alpha {self.BUFFER_ALPHA}\n")
+
+                    # Actor lr scheduler
+                    for p in self.policy.actor_optimizer.param_groups:
+                        p['lr'] = self.actor_lr_scheduler.value(t)
+
+                    # Critic lr scheduler
+                    for p in self.policy.critic_optimizer.param_groups:
+                        p['lr'] = self.critic_lr_scheduler.value(t)
+
+                    for p in self.policy.critic_optimizer2.param_groups:
+                        p['lr'] = self.critic_lr_scheduler.value(t)
+
+                FLAG = False  # 삭제해야하는 코드
+                state = next_state
+                episode_reward += reward
+                episode_cost += cost
+
+                # Evaluate episode
+                if (t + 1) % self.args.eval_freq == 0:
+                    print("\nEvaluate score\n")
+                    avg_reward, avg_cost = eval_policy(self.policy, self.env)
+                    if self.args.write:
+                        self.args.summary_writer.add_scalar('eval reward', avg_reward, global_step=t)
+                        self.args.summary_writer.add_scalar('episode_reward', episode_reward, global_step=t)
+                        self.args.summary_writer.add_scalar('eval_cost', avg_cost, global_step=t)
+                        self.args.summary_writer.add_scalar('episode_cost', episode_cost, global_step=t)
+                        self.args.summary_writer.add_scalar('BUFFER_alpha', self.BUFFER_ALPHA, global_step=t)
+                        self.args.summary_writer.add_scalar('beta', self.BETA, global_step=t)
+
+                    self.policy.save(f"./models/{self.file_name}")
+                    print('writer add scalar and save model   ', 'steps: {}k'.format(int(t / 1000)), 'AVG reward:', int(avg_reward), 'AVG cost:', int(avg_cost))
+                    t = t + 1
+
+            # 10 episode 후 서버로 weight 값 보내기
+            if (t + 1) % self.args.update_freq == 0:
+                weights = {}
+                for name, param in self.policy.actor.named_parameters():
+                    weights[name] = param.detach().cpu().numpy()
+
+                parameter_server = ray.get_actor("ParameterServer")
+                parameter_server.add_weights.remote(weights)
+                print(f"{self.id}'s Weights sent to the central server.")
+
+            print(f"\n--------{self.id}--- timestep : {t} reward : {episode_reward}  cost : {episode_cost}--------\n")
+
+        
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -63,7 +201,8 @@ def main():
 
     parser.add_argument('--Loadmodel', type=bool, default=False,help='Load pretrained model or Not')  # 훈련 마치고 나서는 True로 설정 하기
 
-    parser.add_argument('--port_num', type=int, default=3000, help='Port num')  # 훈련 마치고 나서는 True로 설정 하기
+    parser.add_argument('--port', type=int, default=3000, help='Port num')
+    parser.add_argument('--traffic_port', type=int, default=8000, help='Traffic port num')
 
     args = parser.parse_args()
 
@@ -80,7 +219,8 @@ def main():
 
     # carla env parameter
     params = {
-        'carla_port': args.port_num,
+        'carla_port': args.port,
+        'traffic_port': args.traffic_port,
         'map_name': 'Town10HD',
         'window_resolution': [1080, 1080],
         'grid_size': [3, 3],
@@ -94,170 +234,21 @@ def main():
         'sensors_to_amount': ['front_rgb', 'lidar'],
     }
 
-    env= WrappedGymEnv(gym.make("CarlaRlEnv-v0",params=params),args)
+    num_workers = 2
 
-    writer = SummaryWriter(log_dir=f"./results/{file_name}")
-    args.summary_writer = writer
-
-
-    args.action_shape = env.action_space.shape[0]
-    args.action_scale = env.action_scale
-    args.action_bias = env.action_bias
-
-
-    # Set seeds
-    #env.seed(args.seed)
-    env.action_space.seed(args.seed)
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
-
-    print(args)
-
-    policy = SAC(args,device)
-
-    buffer = PER_Buffer(args, device=device)
-
-    BETA = args.beta_init
-    BUFFER_ALPHA = 0.6
-
-    beta_scheduler = LinearSchedule(args.beta_gain_steps,args.beta_init,1.0) # beta end is 1.0 : scheduler must go to 1.0
-    buffer_alpha_scheduler = adaptiveSchedule(args.alpha_max,args.alpha_min)
-
-    actor_lr_scheduler = LinearSchedule(args.lr_decay_steps, args.lr_init, args.lr_end)
-    critic_lr_scheduler = LinearSchedule(args.lr_decay_steps, args.lr_init, args.lr_end)
-
-    # Ray 초기화
+    ray.shutdown()
     ray.init(address='auto', namespace="parameter_server_namespace")
+    workers = []
+    for worker_id in range(num_workers):
+        port = args.port + worker_id * 100
+        print(port)
+        traffic_port = args.traffic_port + worker_id * 100
+        worker = Worker.remote(worker_id, params, args, file_name, port, traffic_port)
+        workers.append(worker)
 
-    # 현재 액터 목록 확인
-    print("Current actors:", ray.util.list_named_actors())
-
-    try:
-        parameter_server = ray.get_actor("ParameterServer")
-    except ValueError:
-        print("ParameterServer actor does not exist. Please ensure it is created.")
-        return
-
-
-    # load the model
-    if args.Loadmodel:
-        policy.load(f"./models/{file_name}")
-
-    # test
-    if args.render and args.Loadmodel:
-        pass
-
-    else:
-        for t in range(int(args.max_timesteps)):
-
-
-            state = env.reset()
-
-
-
-            done = False
-            episode_reward = 0
-            episode_cost=0
-
-
-            while True:
-
-                if not args.Loadmodel and t < args.start_timesteps:
-                    action = policy.select_action(state, random_sample=True)
-
-
-                else:
-                    action = policy.select_action(state, random_sample=False)
-                    #print(f"select action: {action} and shape is {action.shape}\n\n")
-
-                # Perform action
-                next_state, reward, done, info = env.step(action)
-                env.display()
-                cost = info['cost'] # collision & invasion cost
-
-                experience = Experience(state, action, reward, next_state, done)
-
-                buffer.add(experience)
-
-                if done:
-                    print(f"done after {t+1} steps done is {done}")
-
-                    break
-
-                # train      and t > args.start_timesteps
-                if policy.has_enough_experience(buffer) and t > args.start_timesteps:
-                    #print(f"\ntimestep {t} train start\n")
-                    policy.train(BETA, BUFFER_ALPHA, buffer)
-                    #print(f"\ntrain debug {c1} ,{c2} ,{actor_loss} ,{alpha}, {alpha_loss}\n\n")
-
-
-
-
-                    BETA = beta_scheduler.value(t)
-                    td_mean = np.mean(buffer.buffer[:len(buffer)]["priority"])
-                    td_std = np.std(buffer.buffer[:len(buffer)]["priority"])
-                    BUFFER_ALPHA = buffer_alpha_scheduler.value(td_mean, td_std)
-
-                    # 삭제해야하는 코드
-                    if FLAG:
-                        print(f"\ntimestep {t} train start beta {BETA} td_mean {td_mean} td std {td_std} buffer alpha {BUFFER_ALPHA}\n")
-
-                    #print(f"\n scheduler debug {BETA} ,{td_mean} ,{td_std}, {ALPHA}\n\n")
-
-                    # actor lr scheduler
-                    for p in policy.actor_optimizer.param_groups:
-
-                        p['lr'] = actor_lr_scheduler.value(t)
-
-                    # critic lr scheduler
-                    for p in policy.critic_optimizer.param_groups:
-                        p['lr'] = critic_lr_scheduler.value(t)
-
-                    for p in policy.critic_optimizer2.param_groups:
-                        p['lr'] = critic_lr_scheduler.value(t)
-
-                FLAG = False # 삭제해야하는 코드
-                state = next_state
-                episode_reward += reward
-                episode_cost+=cost
-
-                # Evaluate episode
-                if (t + 1) % args.eval_freq == 0:
-                    print("\nEvaluate score\n")
-                    avg_reward,avg_cost = eval_policy(policy, env)
-                    if args.write:
-                        args.summary_writer.add_scalar('eval reward', avg_reward, global_step=t)
-                        args.summary_writer.add_scalar('episode_reward', episode_reward, global_step=t)
-                        args.summary_writer.add_scalar('eval_cost', avg_cost, global_step=t)
-                        args.summary_writer.add_scalar('episode_cost', episode_cost, global_step=t)
-
-                        args.summary_writer.add_scalar('BUFFER_alpha', BUFFER_ALPHA, global_step=t)
-                        #args.summary_writer.add_scalar('critic_loss1', c1, global_step=t)
-                        #args.summary_writer.add_scalar('critic_loss2', c2, global_step=t)
-                        #args.summary_writer.add_scalar('actor_loss', actor_loss, global_step=t)
-                        #args.summary_writer.add_scalar('autotune_alpha', alpha, global_step=t)
-                        #args.summary_writer.add_scalar('autotune_alpha_loss', alpha_loss, global_step=t)
-
-                        args.summary_writer.add_scalar('beta', BETA, global_step=t)
-
-                    policy.save(f"./models/{file_name}")
-                    print('writer add scalar and save model   ', 'steps: {}k'.format(int(t / 1000)), 'AVG reward:',int(avg_reward),'AVG cost:',int(avg_cost))
-                    t = t + 1
-                    
-            #10 episode 후 서버로 weight 값 보내기
-            if (t + 1) % args.update_freq == 0:
-                weights = {}
-                for name, param in policy.actor.named_parameters():
-                    weights[name] = param.detach().cpu().numpy()
-
-                parameter_server.add_weights.remote(weights)
-                print(" Weights sent to the central server.")
-
-        print(f"\n--------timestep : {t} reward : {episode_reward}  cost : {episode_cost}--------\n")
-
-
-
-
+    # 각 워커에서 학습 시작
+    train_ids = [worker.train.remote() for worker in workers]
+    ray.get(train_ids)
 
 
 if __name__ == '__main__':

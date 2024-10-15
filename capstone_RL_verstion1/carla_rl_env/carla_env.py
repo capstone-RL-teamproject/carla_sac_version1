@@ -119,6 +119,7 @@ class CarlaRlEnv(gym.Env):
         # resource from outside
         # parse parameters
         self.carla_port = params['carla_port']
+        self.traffic_port = params['traffic_port']
         self.map_name = params['map_name']
         self.window_resolution = params['window_resolution']
         self.grid_size = params['grid_size']
@@ -150,17 +151,17 @@ class CarlaRlEnv(gym.Env):
             settings.no_rendering_mode = True
             self.world.apply_settings(settings)
 
-        self.traffic_port = 8000
-        if self.sync:
-            # 포트 8000을 기본으로 시도
-            self.traffic_port = self.get_available_port(self.traffic_port)
-            traffic_manager = self.client.get_trafficmanager(self.traffic_port)
-            print(f"Using traffic manager on port {self.traffic_port}")
-            settings = self.world.get_settings()
-            traffic_manager.set_synchronous_mode(True)
-            settings.synchronous_mode = True
-            settings.fixed_delta_seconds = 0.1
-            self.world.apply_settings(settings)
+        # self.traffic_port = 8000
+        # if self.sync:
+        #     # 포트 8000을 기본으로 시도
+        #     self.traffic_port = self.get_available_port(self.traffic_port)
+        #     traffic_manager = self.client.get_trafficmanager(self.traffic_port)
+        #     print(f"Using traffic manager on port {self.traffic_port}")
+        #     settings = self.world.get_settings()
+        #     traffic_manager.set_synchronous_mode(True)
+        #     settings.synchronous_mode = True
+        #     settings.fixed_delta_seconds = 0.1
+        #     self.world.apply_settings(settings)
 
         self.ego_vehicle = None
         self.display_manager = DisplayManager(self.grid_size, self.window_resolution, self.display_sensor)
@@ -572,10 +573,12 @@ class CarlaRlEnv(gym.Env):
             del s
         self.sensor_list = []
 
-        for v in self.vehicle_list:
-            if v.is_alive:
-                v.destroy()
-            del v
+        # for v in self.vehicle_list:
+
+        #     if v.is_alive:
+        #         v.destroy()
+        #     del v
+        self.client.apply_batch([carla.command.DestroyActor(x) for x in self.vehicle_list])
 
         if self.ego_vehicle is not None:
             del self.ego_vehicle
