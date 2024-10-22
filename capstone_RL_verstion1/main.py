@@ -3,20 +3,22 @@ from wrapperGymEnv import *
 import argparse
 import torch
 import os
+import time
 
 from carla_rl_env.carla_env import CarlaRlEnv
 from SAC_for_carla_v2.sac import SAC
-from SAC_for_carla_v2.PER import PER_Buffer
+# from SAC_for_carla_v2.PER import PER_Buffer
 from SAC_for_carla_v2.utils import *
 import gym
 import ray
+from central import ParameterServer
+from gym.envs.registration import register
 
 FLAG=True# 삭제해야하는 코드
 
 @ray.remote
 class Worker:
     def __init__(self, worker_id, _params, _args, file_name, port, traffic_port):
-        from gym.envs.registration import register
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print("\nDevice is ", device)
         print()
@@ -36,6 +38,8 @@ class Worker:
         self.params['carla_port'] = port
         self.params['traffic_port'] = traffic_port
 
+        self.policy = SAC(self.args,device)
+
         self.env = WrappedGymEnv(gym.make("CarlaRlEnv-v0", params=self.params), self.args)
 
         self.writer = SummaryWriter(log_dir=f"./results/{file_name}")
@@ -45,6 +49,9 @@ class Worker:
         self.args.action_scale = self.env.action_scale
         self.args.action_bias = self.env.action_bias
 
+        self.central_server = ray.get_actor("ParameterServer", namespace="parameter_server_namespace")
+
+
         # Set seeds
         self.env.action_space.seed(self.args.seed)
         torch.manual_seed(self.args.seed)
@@ -52,24 +59,27 @@ class Worker:
 
         print(self.args)
 
-        self.policy = SAC(self.args, device)
-        self.buffer = PER_Buffer(self.args, device=device)
-
-        self.BETA = self.args.beta_init
-        self.BUFFER_ALPHA = 0.6
-
-        self.beta_scheduler = LinearSchedule(self.args.beta_gain_steps, self.args.beta_init, 1.0)
-        self.buffer_alpha_scheduler = adaptiveSchedule(self.args.alpha_max, self.args.alpha_min)
-
-        self.actor_lr_scheduler = LinearSchedule(self.args.lr_decay_steps, self.args.lr_init, self.args.lr_end)
-        self.critic_lr_scheduler = LinearSchedule(self.args.lr_decay_steps, self.args.lr_init, self.args.lr_end)
-
         # Load the model if needed
         if self.args.Loadmodel:
             self.policy.load(f"./models/{file_name}")
 
+    def update_policy(self, new_weights):
+        # Actor 업데이트
+        for name, param in self.policy.actor.named_parameters():
+            param.data.copy_(torch.from_numpy(new_weights['actor'][name]))
+        # Critic1 업데이트
+        for name, param in self.policy.critic.named_parameters():
+            param.data.copy_(torch.from_numpy(new_weights['critic1'][name]))
+        # Critic2 업데이트
+        for name, param in self.policy.critic2.named_parameters():
+            param.data.copy_(torch.from_numpy(new_weights['critic2'][name]))
+        # log_alpha 업데이트
+        self.policy.log_alpha.data.copy_(torch.from_numpy(new_weights['log_alpha']))
+
     def train(self):
         FLAG = True  # 삭제해야하는 코드
+
+        step_counter = 0  # 스텝 카운터 초기화
 
         for t in range(int(self.args.max_timesteps)):
 
@@ -91,38 +101,26 @@ class Worker:
                 cost = info['cost']  # collision & invasion cost
 
                 experience = Experience(state, action, reward, next_state, done)
-                self.buffer.add(experience)
+                self.central_server.add_experience.remote(experience)
 
                 if done:
                     print(f"done after {t+1} steps done is {done}")
                     break
 
-                # Train policy
-                if self.policy.has_enough_experience(self.buffer) and t > self.args.start_timesteps:
-                    self.policy.train(self.BETA, self.BUFFER_ALPHA, self.buffer)
-                    self.BETA = self.beta_scheduler.value(t)
-                    td_mean = np.mean(self.buffer.buffer[:len(self.buffer)]["priority"])
-                    td_std = np.std(self.buffer.buffer[:len(self.buffer)]["priority"])
-                    self.BUFFER_ALPHA = self.buffer_alpha_scheduler.value(td_mean, td_std)
-
-                    if FLAG:
-                        print(f"\ntimestep {t} train start beta {self.BETA} td_mean {td_mean} td std {td_std} buffer alpha {self.BUFFER_ALPHA}\n")
-
-                    # Actor lr scheduler
-                    for p in self.policy.actor_optimizer.param_groups:
-                        p['lr'] = self.actor_lr_scheduler.value(t)
-
-                    # Critic lr scheduler
-                    for p in self.policy.critic_optimizer.param_groups:
-                        p['lr'] = self.critic_lr_scheduler.value(t)
-
-                    for p in self.policy.critic_optimizer2.param_groups:
-                        p['lr'] = self.critic_lr_scheduler.value(t)
-
                 FLAG = False  # 삭제해야하는 코드
                 state = next_state
                 episode_reward += reward
                 episode_cost += cost
+
+                step_counter += 1
+
+                print(f"{self.id}번 워커의 step: {step_counter}")
+
+                # 주기적으로 파라미터 동기화
+                if step_counter % self.args.sync_freq == 0:
+                    new_weights = ray.get(self.central_server.get_policy_weights.remote())
+                    self.update_policy(new_weights)
+                    print(f"{self.id}번 워커가 스텝 {step_counter}에서 중앙 서버로부터 policy 업데이트.")
 
                 # Evaluate episode
                 if (t + 1) % self.args.eval_freq == 0:
@@ -139,16 +137,6 @@ class Worker:
                     self.policy.save(f"./models/{self.file_name}")
                     print('writer add scalar and save model   ', 'steps: {}k'.format(int(t / 1000)), 'AVG reward:', int(avg_reward), 'AVG cost:', int(avg_cost))
                     t = t + 1
-
-            # 10 episode 후 서버로 weight 값 보내기
-            if (t + 1) % self.args.update_freq == 0:
-                weights = {}
-                for name, param in self.policy.actor.named_parameters():
-                    weights[name] = param.detach().cpu().numpy()
-
-                parameter_server = ray.get_actor("ParameterServer")
-                parameter_server.add_weights.remote(weights)
-                print(f"{self.id}'s Weights sent to the central server.")
 
             print(f"\n--------{self.id}--- timestep : {t} reward : {episode_reward}  cost : {episode_cost}--------\n")
 
@@ -179,7 +167,7 @@ def main():
     parser.add_argument("--load_model", default="")  # Model load file name, "" doesn't load, "default" uses file_name
     parser.add_argument('--gamma', type=float, default=0.99, help='Discounted Factor')
 
-    parser.add_argument("--start_timesteps", default=2000, type=int)  # Time steps initial random policy is used 2000
+    parser.add_argument("--start_timesteps", default=10, type=int)  # Time steps initial random policy is used 2000
 
     parser.add_argument("--max_timesteps", default=1e6, type=int)  # Max time steps to run environment
     parser.add_argument("--expl_noise", default=0.1, type=float)  # Std of Gaussian exploration noise
@@ -198,6 +186,7 @@ def main():
 
     parser.add_argument("--update_freq", default=10, type=int)  # How often we update central model
     parser.add_argument("--eval_freq", default=1e3, type=int)  # How often (time steps) we evaluate 1e3
+    parser.add_argument("--sync_freq", default=50, type=int, help="중앙 서버와 정책 파라미터를 동기화하는 빈도(스텝 수)")
 
     parser.add_argument('--Loadmodel', type=bool, default=False,help='Load pretrained model or Not')  # 훈련 마치고 나서는 True로 설정 하기
 
@@ -237,7 +226,27 @@ def main():
     num_workers = 2
 
     ray.shutdown()
-    ray.init(address='auto', namespace="parameter_server_namespace")
+    ray.init(namespace="parameter_server_namespace")
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+    register(
+        id='CarlaRlEnv-v0',
+        entry_point='carla_rl_env.carla_env:CarlaRlEnv',
+        max_episode_steps=1000,
+    )
+    temp_env = WrappedGymEnv(gym.make("CarlaRlEnv-v0", params=params), args)
+    args.action_shape = temp_env.action_space.shape[0]
+    args.action_scale = temp_env.action_scale
+    args.action_bias = temp_env.action_bias
+
+    central_server = ParameterServer.options(
+        name="ParameterServer",
+        namespace="parameter_server_namespace",  # 네임스페이스 추가
+        lifetime="detached"
+    ).remote(args, device, expected_workers=num_workers)
+
     workers = []
     for worker_id in range(num_workers):
         port = args.port + worker_id * 100
@@ -248,7 +257,16 @@ def main():
 
     # 각 워커에서 학습 시작
     train_ids = [worker.train.remote() for worker in workers]
-    ray.get(train_ids)
+
+    print("Central server is ready to collect parameters...")
+    print("Current actors:", ray.util.list_named_actors())
+    
+    t = 0
+    while True:
+        # 정책 학습 수행
+        central_server.train_policy.remote(t)
+        t += 1
+        time.sleep(5)
 
 
 if __name__ == '__main__':
