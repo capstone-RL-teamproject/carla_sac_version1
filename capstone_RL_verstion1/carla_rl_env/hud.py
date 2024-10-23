@@ -507,6 +507,13 @@ class MapImage(object):
     def world_to_pixel_width(self, width):
         """Converts the world units to pixel units"""
         return int(self.scale * self.pixel_per_meter * width)
+    
+    def pixel_to_world(self, pixel):
+        """미니맵의 픽셀 좌표를 CARLA 월드 좌표로 변환"""
+        x, y = pixel
+        world_x = (x / self.pixel_per_meter) + self.world_offset[0]
+        world_y = (y / self.pixel_per_meter) + self.world_offset[1]
+        return carla.Location(world_x, world_y)
 
 
 
