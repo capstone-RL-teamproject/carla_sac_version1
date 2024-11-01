@@ -61,39 +61,4 @@ class WrappedGymEnv(gym.Wrapper):
 
 
 
-
-        # 이미지 확인하기
-        # print('\n--------------------\n')
-
-        # # src_img: first 3 channels
-        # src_img_1_display = np.transpose(src_img[:3], [2, 1, 0])
-        #
-        # # src_img: last 3 channels
-        # src_img_2_display = np.transpose(src_img[3:], [2, 1, 0])
-        #
-        # # tgt_img: target image (transposed back for visualization)
-        # tgt_img_display = np.transpose(tgt_img, [1, 2, 0])
-        #
-        # # Plotting src_img (split into 2) and tgt_img
-        # fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-        #
-        # # Displaying the first 3 channels of src_img
-        # axs[0].imshow(src_img_1_display)
-        # axs[0].set_title('src_img (First 3 channels)')
-        # axs[0].axis('off')
-        #
-        # # Displaying the last 3 channels of src_img
-        # axs[1].imshow(src_img_2_display)
-        # axs[1].set_title('src_img (Last 3 channels)')
-        # axs[1].axis('off')
-        #
-        # # Displaying the tgt_img
-        # axs[2].imshow(tgt_img_display)
-        # axs[2].set_title('tgt_img')
-        # axs[2].axis('off')
-        #
-        # # Show the plot
-        # plt.show()
-        # print('\n--------------------\n')
-        #print(f"\n\nwrapper gym env R :{re[1]}  D :{re[2]}  I :{re[3]}\n\n")
         return tgt_img, re[1], re[2], re[3]  # src_img,wpsh,~~~~  observation ,reward, done, info
