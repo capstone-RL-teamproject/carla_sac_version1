@@ -362,7 +362,14 @@ class CarlaRlEnv(gym.Env):
             self.done = True
             lane_invasion_cost = 1.0
 
+        # traffic light
+        if self.ego_vehicle.is_at_traffic_light():
+           self.done = True
+           cross_red_light_reward = -1.0
+        else:
+           cross_red_light_reward = 0.0
 
+        
         # speed limit
         current_velocity = self.ego_vehicle.get_velocity()
         current_speed = np.sqrt(current_velocity.x ** 2 + current_velocity.y ** 2 + current_velocity.z ** 2)  # unit m/s
@@ -409,9 +416,9 @@ class CarlaRlEnv(gym.Env):
 
 
 
-        self.reward = 0.1 * time_reward + 200.0 * arriving_reward + 2.0 * off_way_reward + 0.1 * speed_reward + 3.0 * steer_reward + 0.5 * lat_acc_reward + 3.0 * waypoints_len_reward
+        self.reward = 0.1 * time_reward + 200.0 * arriving_reward + 2.0 * off_way_reward + 0.1 * speed_reward + 3.0 * steer_reward + 0.5 * lat_acc_reward + 3.0 * waypoints_len_reward + 100.0*cross_red_light_reward
 
-        self.cost = 200.0 * collision_cost + 10.0 * lane_invasion_cost
+        self.cost = 200.0 * collision_cost + 10.0 * lane_invasion_cost -100.0*cross_red_light_reward
 
         return self.reward, self.done, self.cost
 
