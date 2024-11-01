@@ -95,19 +95,86 @@ class Util(object):
         for surface in source_surface:
             destination_surface.blit(surface[0],surface[1],rect,blend_mode)
 
+    @staticmethod
+    def length(v):
+        """
+
+        :param v:
+        :return: length of vector
+        """
+        return math.sqrt(v.x**2 + v.y**2 + v.z**2)
+
+    @staticmethod
+    def get_bounding_box(actor):
+        """
+
+        :param actor:
+        :return: bounding box corners of an actor in world space
+        """
+        bb = actor.trigger_volume.extent
+        corners = [carla.Location(x=-bb.x,y=-bb.y),
+                   carla.Location(x=bb.x, y=-bb.y),
+                   carla.Location(x=bb.x, y=bb.y),
+                   carla.Location(x=-bb.x, y=bb.y),
+                   carla.Location(x=-bb.x, y=-bb.y)
+                   ]
+        corners = [x + actor.trigger_volume.location for x in corners]
+
+        t = actor.get_transform() # (location , rotation)
+        t.transform(corners) # local -> global coordinate
+        return corners
 
 
 
 
+class TrafficLightSurfaces(object):
+    """신호등 그리는 surface"""
 
+    def __init__(self):
+        def make_surface(tl):
+            """
+            신호등  : 빨강 , 초록, 오랜지 3가지 상태로 표시
+            """
+            w = 40
+            surface = pygame.Surface((w, 3 * w), pygame.SRCALPHA)
+            surface.fill(COLOR_ALUMINIUM_5 if tl != 'h' else COLOR_ORANGE_2)
+            if tl != 'h':
+                hw = int(w / 2)
+                off = COLOR_ALUMINIUM_4
+                red = COLOR_SCARLET_RED_0
+                yellow = COLOR_BUTTER_0
+                green = COLOR_CHAMELEON_0
+
+                # Draws the corresponding color if is on, otherwise it will be gray if its off
+                pygame.draw.circle(surface, red if tl == tls.Red else off, (hw, hw), int(0.4 * w))
+                pygame.draw.circle(surface, yellow if tl == tls.Yellow else off, (hw, w + hw), int(0.4 * w))
+                pygame.draw.circle(surface, green if tl == tls.Green else off, (hw, 2 * w + hw), int(0.4 * w))
+
+            return pygame.transform.smoothscale(surface, (15, 45) if tl != 'h' else (19, 49))
+
+        self._original_surfaces = {
+            'h': make_surface('h'),
+            tls.Red: make_surface(tls.Red),
+            tls.Yellow: make_surface(tls.Yellow),
+            tls.Green: make_surface(tls.Green),
+            tls.Off: make_surface(tls.Off),
+            tls.Unknown: make_surface(tls.Unknown)
+        }
+        self.surfaces = dict(self._original_surfaces)
+
+    def rotozoom(self, angle, scale):
+        """회전과 스케일 적용한 신호등"""
+        for key, surface in self._original_surfaces.items():
+            self.surfaces[key] = pygame.transform.rotozoom(surface, angle, scale)
 
 class MapImage(object):
     """
     rendering 2d image from carla world. use cach system(opendrive)
     """
-    def __init__(self,carla_world, carla_map, pixels_per_meter):
+    def __init__(self,carla_world, carla_map, pixels_per_meter,show_trigger=True):
         self.pixel_per_meter = pixels_per_meter
         self.scale = 1.0
+        self.show_trigger = show_trigger
 
         waypoints = carla_map.generate_waypoints(2) # 2m간격으로 waypoint 생성
         margin = 10
@@ -142,7 +209,7 @@ class MapImage(object):
         hash_func.update(opendrive_content.encode("UTF-8"))
         opendrive_hash = str(hash_func.hexdigest())
 
-        # Build path for saving or loading the cached rendered map -> Use cache
+        # Build path for saving or loading the cached rendered map
         filename = carla_map.name.split('/')[-1] + "_" + opendrive_hash + ".tga"
         dirname = os.path.join("cache", "no_rendering_mode")
         full_path = str(os.path.join(dirname, filename))
@@ -335,7 +402,11 @@ class MapImage(object):
             for marking in last_markings:
                 markings_list.append(marking)
 
+            # Once the lane markings have been simplified to Solid or Broken lines, we draw them
 
+            # markings[0] : solid,broken... type
+            # markings[1] : color
+            # markings[2] : waypoint list
             for markings in markings_list:
                 if markings[0] == carla.LaneMarkingType.Solid:
                     draw_solid_line(surface, markings[1], False, markings[2], 2)
@@ -377,6 +448,12 @@ class MapImage(object):
 
             line_pixel = [world_to_pixel(p) for p in line]
             pygame.draw.lines(surface, color, True, line_pixel, 2)
+
+            # Draw bounding box of the stop trigger
+            if self.show_trigger:
+                corners = Util.get_bounding_box(actor)
+                corners = [world_to_pixel(p) for p in corners]
+                pygame.draw.lines(surface,trigger_color,True,corners,2)
 
 
 
@@ -523,6 +600,7 @@ class HUD(object):
         self.target_transform = target_transform
         self.waypoints = waypoints
 
+
         self.server_clock = pygame.time.Clock()
         self.surface = pygame.Surface(display_size).convert()
         self.surface.set_colorkey(COLOR_BLACK)
@@ -565,6 +643,8 @@ class HUD(object):
         self.result_surface = pygame.Surface((self.surface_size,self.surface_size)).convert()
         self.result_surface.set_colorkey(COLOR_BLACK)
 
+        self.traffic_light_surfaces = TrafficLightSurfaces() # traffic light
+
 
         weak_self = weakref.ref(self)
         self.world.on_tick(lambda timestamp: HUD.on_world_tick(weak_self, timestamp))
@@ -603,17 +683,51 @@ class HUD(object):
     def split_actors(self):
         vehicles = []
         walkers = []
+        traffic_lights=[]
 
         for actor_with_transform in self.actors_with_transforms:
             actor = actor_with_transform[0] # (actor,actor.get_transform())
 
             if 'vehicle' in actor.type_id:
                 vehicles.append(actor_with_transform)
+            elif 'traffic_light' in actor.type_id:
+                traffic_lights.append(actor_with_transform)
 
             elif 'walker.pedestrian' in actor.type_id:
                 walkers.append(actor_with_transform)
 
-        return (vehicles, walkers)
+        return (vehicles,traffic_lights,walkers)
+
+    def render_traffic_lights(self, surface, list_tl,show_triggers, world_to_pixel):
+        self.affected_traffic_light = None
+
+        for tl in list_tl:
+            world_pos = tl.get_location()
+            pos = world_to_pixel(world_pos)
+
+            if show_triggers:
+                corners = Util.get_bounding_box(tl)
+                corners = [world_to_pixel(p) for p in corners]
+                pygame.draw.lines(surface, COLOR_BUTTER_1,True, corners, 2)
+
+            if self.lead_actor is not None:
+                corners = Util.get_bounding_box(tl)
+                corners = [world_to_pixel(p) for p in corners]
+                tl_t = tl.get_transform()
+
+                transformed_tv = tl_t.transform(tl.trigger_volume.location)
+                lead_actor_location = self.lead_actor.get_location()
+                d = lead_actor_location.distance(transformed_tv)
+                s = Util.length(tl.trigger_volume.extent) + Util.length(self.lead_actor.bounding_box.extent)
+
+                if (d <= s):
+                    # Highlight traffic light
+                    self.affected_traffic_light = tl
+                    srf = self.traffic_light_surfaces.surfaces['h']
+                    surface.blit(srf, srf.get_rect(center=pos))
+
+            srf = self.traffic_light_surfaces.surfaces[tl.state]
+            surface.blit(srf, srf.get_rect(center=pos))
 
 
     def render_walkers(self,surface,list_walker,world_to_pixel):
@@ -675,7 +789,12 @@ class HUD(object):
         pygame.draw.circle(surface, colors[1], location, radius_in_pix, 0)
 
 
-    def render_actors(self,surface,vehicles,walkers):
+    def render_actors(self,surface,vehicles,traffic_lights,walkers):
+
+        # Add Render traffic
+        list_tl = [tl[0] for tl in traffic_lights]
+
+        self.render_traffic_lights(surface,list_tl,self.map_image.show_trigger,self.map_image.world_to_pixel)
 
         self.render_vehicles(surface,vehicles,self.map_image.world_to_pixel)
         self.render_walkers(surface,walkers,self.map_image.world_to_pixel)
@@ -706,7 +825,7 @@ class HUD(object):
 
         self.result_surface.fill(COLOR_BLACK)
 
-        vehicles,walkers = self.split_actors()
+        vehicles,traffic_lights,walkers = self.split_actors()
 
         # render waypoints
 
@@ -717,7 +836,7 @@ class HUD(object):
 
         # render actor
         self.actors_surface.fill(COLOR_BLACK)
-        self.render_actors(self.actors_surface,vehicles,walkers)
+        self.render_actors(self.actors_surface,vehicles,traffic_lights,walkers)
 
         # blits surfaces
         surfaces = ((self.map_image.surface,(0,0)),(self.waypoints_surface,(0,0)),(self.actors_surface,(0,0)))
