@@ -4,13 +4,15 @@ import numpy as np
 import torch
 from torch.optim import Adam, SGD
 from torch.optim.lr_scheduler import MultiStepLR
-from ReplayBuffer import CostReplayBuffer
-from network import GaussianPolicy, TwinnedQNetwork, SingleQNetwork,LatentGaussianPolicy
-from latent import CostLatentModel
+from .ReplayBuffer import CostReplayBuffer
+from .network import GaussianPolicy, TwinnedQNetwork, SingleQNetwork,LatentGaussianPolicy
+from .latent import CostLatentModel
 
-from ..utils import create_feature_actions, grad_false, soft_update
+from utils import create_feature_actions, grad_false, soft_update
 from collections import defaultdict
 import torch.nn.functional
+
+import ray
 
 
 class LatentPolicySafetyCriticSlac:
@@ -27,6 +29,7 @@ class LatentPolicySafetyCriticSlac:
             action_repeat,
             device,
             seed,
+            parameter_server,
             gamma=0.99,
             gamma_c=0.995,
             batch_size_sac=256,
@@ -43,7 +46,8 @@ class LatentPolicySafetyCriticSlac:
             start_alpha=3.3e-4,
             start_lagrange=2.5e-2,
             grad_clip_norm=10.0,
-            image_noise=0.1
+            image_noise=0.1,
+            is_worker=True
     ):
         np.random.seed(seed)
         torch.manual_seed(seed)
@@ -53,6 +57,8 @@ class LatentPolicySafetyCriticSlac:
         self.budget_undiscounted = budget
         self.steps = 1000 / action_repeat
         self.budget = budget * (1 - gamma_c ** (1000 / action_repeat)) / (1 - gamma_c) / (1000 / action_repeat)
+
+        self.parameter_server = parameter_server
 
         # Replay buffer.
         self.buffer = CostReplayBuffer(buffer_size, num_sequences, state_shape, ometer_shape, tgt_state_shape,
@@ -154,6 +160,8 @@ class LatentPolicySafetyCriticSlac:
         self.z2 = None
         self.create_feature_actions = create_feature_actions
 
+        self.is_worker = is_worker
+
     def step(self, env, ob, t, is_pid, writer=None):
 
         t += 1
@@ -172,7 +180,8 @@ class LatentPolicySafetyCriticSlac:
         mask = False if t >= env._max_episode_steps else done
         ob.append(state, ometer, tgt_state, action)
 
-        self.buffer.append(action, reward, mask, state, ometer, tgt_state, done, cost)
+        # self.buffer.append(action, reward, mask, state, ometer, tgt_state, done, cost)
+        n_buffer = ray.get(self.parameter_server.add_buffer.remote(action, reward, mask, state, ometer, tgt_state, done, cost))
 
         if done:
             if not is_pid:
@@ -188,7 +197,12 @@ class LatentPolicySafetyCriticSlac:
             self.buffer.reset_episode(state, ometer, tgt_state)
             self.z1 = None
             self.z2 = None
-        return t
+
+            return t, n_buffer
+        
+    def add_buffer(self, action, reward, mask, state, ometer, tgt_state, done, cost):
+        ray.get(self.parameter_server.add_buffer.remote(action, reward, mask, state, ometer, tgt_state, done, cost))
+        return len(ray.get(self.parameter_server.get_buffer_size))
 
     def preprocess(self, ob):
         state = torch.tensor(ob.last_state, dtype=torch.uint8, device=self.device).float().div_(255.0)

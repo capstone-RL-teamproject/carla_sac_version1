@@ -8,9 +8,11 @@ import numpy as np
 import pandas as pd
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
-from ..utils import sample_reproduction
+from utils import sample_reproduction
 from PIL import Image
 from copy import deepcopy
+
+import ray
 
 
 class SlacObservation:
@@ -77,7 +79,6 @@ class SlacObservation:
     def last_action(self):
         return np.array(self._action[-1])
 
-
 class Trainer:
     """
     Trainer for SLAC.
@@ -89,6 +90,7 @@ class Trainer:
             env_test,
             algo,
             log_dir,
+            parameter_server,
             seed=0,
             num_steps=3 * 10 ** 6,
             initial_collection_steps=2 * 10 ** 4,
@@ -99,11 +101,13 @@ class Trainer:
             num_eval_episodes=3,
             env_steps_per_train_step=1,
             action_repeat=1,
-            train_steps_per_iter=1
+            train_steps_per_iter=1,
+            is_worker=True
     ):
         # Env to collect samples.
         self.env = env
         self.env.seed(seed)
+        print(env.seed)
         self.train_steps_per_iter = train_steps_per_iter
         # Env for evaluation.
         self.env_test = env_test
@@ -138,6 +142,8 @@ class Trainer:
         self.env_steps_per_train_step = env_steps_per_train_step
         self.collect_with_policy = collect_with_policy
 
+        self.is_worker = is_worker
+
     def debug_save_obs(self, state, name, step=0):
         self.writer.add_image(f"observation/{name}", state.astype(np.uint8), global_step=step)
 
@@ -146,6 +152,8 @@ class Trainer:
         self.start_time = time()
         # Episode's timestep.
         t = 0
+        n_buffer = 0
+        n_buffer_iter = 5
         # Initialize the environment.
         # self.env.unwrapped.sim.render_contexts[0].vopt.geomgroup[:] = 1 # render all objects, including hazards
         state, ometer, tgt_state = self.env.reset()
@@ -155,69 +163,77 @@ class Trainer:
 
         # Collect trajectories using random policy.
         bar = tqdm(range(1, self.initial_collection_steps + 1))
-        for step in bar:
-            bar.set_description("collect data.")
-            t = self.algo.step(self.env, self.ob, t,
-                               (not self.collect_with_policy) and step <= self.initial_collection_steps, self.writer)
+
+        if self.is_worker:
+            for step in bar:
+                bar.set_description("collect data.")
+                t, n_buffer = self.algo.step(self.env, self.ob, t,
+                                (not self.collect_with_policy) and step <= self.initial_collection_steps, self.writer)
 
 
         # Update latent variable model first so that SLAC can learn well using (learned) latent dynamics.
         bar = tqdm(range(self.initial_learning_steps * 2))
         for _ in bar:
             bar.set_description("pre-update latent.")
-            self.algo.update_latent(self.writer)
+            # self.algo.update_latent(self.writer)
         bar = tqdm(range(self.initial_learning_steps))
         for _ in bar:
             bar.set_description("pre-update sac.")
-            self.algo.update_sac(self.writer)
+            # self.algo.update_sac(self.writer)
         self.algo.save_model(os.path.join(self.model_dir, f"step{0}"))
 
         # Iterate collection, update and evaluation.
-        for step in range(self.initial_collection_steps + 1, self.num_steps // self.action_repeat + 1):
-            t = self.algo.step(self.env, self.ob, t, False, self.writer)
-            self.algo.update_lag(t, self.writer)
+        for step in range(self.initial_collection_steps + 1, int(self.num_steps // self.action_repeat) + 1):
+            if self.is_worker:
+                t, n_buffer = self.algo.step(self.env, self.ob, t, False, self.writer)
+            else:
+                self.algo.update_lag(t, self.writer)
+
             # Update the algorithm.
-            if t % self.train_steps_per_iter == 0:
-                for _ in range(self.train_steps_per_iter):
-                    self.algo.update_latent(self.writer)
-                    self.algo.update_sac(self.writer)
-                # for _ in range(self.train_steps_per_iter*2):
-                # self.algo.update_latent(self.writer)
-                # for _ in range(self.train_steps_per_iter*1):
-                # self.algo.update_sac(self.writer)
-                # for _ in range(self.train_steps_per_iter//5):
-                #    self.algo.update_sac_with_prior_sample(self.writer)
+            if not self.is_worker:
+                if int(n_buffer // 10) == n_buffer_iter:
+                    for _ in range(self.train_steps_per_iter):
+                        self.algo.update_latent(self.writer)
+                        self.algo.update_sac(self.writer)
+                #     # for _ in range(self.train_steps_per_iter*2):
+                #     # self.algo.update_latent(self.writer)
+                #     # for _ in range(self.train_steps_per_iter*1):
+                #     # self.algo.update_sac(self.writer)
+                #     # for _ in range(self.train_steps_per_iter//5):
+                #     #    self.algo.update_sac_with_prior_sample(self.writer)
 
-            # Evaluate regularly.
-            step_env = step * self.action_repeat
-            if step_env % self.eval_interval == 0:
-                self.algo.save_model(os.path.join(self.model_dir, f"step{step_env}"))
-                self.evaluate(step_env)
+                # Evaluate regularly.
+                step_env = step * self.action_repeat
+                if step_env % self.eval_interval == 0:
+                    self.algo.save_model(os.path.join(self.model_dir, f"step{step_env}"))
+                    self.evaluate(step_env)
 
-                self.writer.add_scalar("cost/train", np.mean(self.algo.epoch_costreturns), global_step=step_env)
-                self.writer.add_scalar("return/train", np.mean(self.algo.epoch_rewardreturns), global_step=step_env)
-                self.algo.epoch_costreturns = []
-                self.algo.epoch_rewardreturns = []
-                self.writer.add_scalar("loss/image", self.algo.loss_image.item(), global_step=step_env)
-                self.writer.add_scalar("loss/actor", self.algo.loss_actor.item(), global_step=step_env)
-                self.writer.add_scalar("loss/kld", self.algo.loss_kld.item(), global_step=step_env)
-                self.writer.add_scalar("loss/reward", self.algo.loss_reward.item(), global_step=step_env)
-                self.writer.add_scalar("loss/critic", self.algo.loss_critic.item(), global_step=step_env)
-                self.writer.add_scalar("loss/safety_critic", self.algo.loss_safety_critic.item(), global_step=step_env)
-                self.writer.add_scalar("loss/cost", self.algo.loss_cost.item(), global_step=step_env)
-                self.writer.add_scalar("loss/alpha", self.algo.loss_alpha.item(), global_step=step_env)
-                self.writer.add_scalar("loss/lag", self.algo.loss_lag.item(), global_step=step_env)
+                    self.writer.add_scalar("cost/train", np.mean(self.algo.epoch_costreturns), global_step=step_env)
+                    self.writer.add_scalar("return/train", np.mean(self.algo.epoch_rewardreturns), global_step=step_env)
+                    self.algo.epoch_costreturns = []
+                    self.algo.epoch_rewardreturns = []
+                    self.writer.add_scalar("loss/image", self.algo.loss_image.item(), global_step=step_env)
+                    self.writer.add_scalar("loss/actor", self.algo.loss_actor.item(), global_step=step_env)
+                    self.writer.add_scalar("loss/kld", self.algo.loss_kld.item(), global_step=step_env)
+                    self.writer.add_scalar("loss/reward", self.algo.loss_reward.item(), global_step=step_env)
+                    self.writer.add_scalar("loss/critic", self.algo.loss_critic.item(), global_step=step_env)
+                    self.writer.add_scalar("loss/safety_critic", self.algo.loss_safety_critic.item(), global_step=step_env)
+                    self.writer.add_scalar("loss/cost", self.algo.loss_cost.item(), global_step=step_env)
+                    self.writer.add_scalar("loss/alpha", self.algo.loss_alpha.item(), global_step=step_env)
+                    self.writer.add_scalar("loss/lag", self.algo.loss_lag.item(), global_step=step_env)
 
-                self.writer.add_scalar("stat/alpha", self.algo.alpha.item(), global_step=step_env)
-                self.writer.add_scalar("stat/entropy", self.algo.entropy.item(), global_step=step_env)
-                self.writer.add_scalar("stat/lag", self.algo.lagrange.item(), global_step=step_env)
+                    self.writer.add_scalar("stat/alpha", self.algo.alpha.item(), global_step=step_env)
+                    self.writer.add_scalar("stat/entropy", self.algo.entropy.item(), global_step=step_env)
+                    self.writer.add_scalar("stat/lag", self.algo.lagrange.item(), global_step=step_env)
 
-            if step_env % 1000 == 0:
-                for sched in self.algo.scheds:
-                    sched.step()
+                if step_env % 1000 == 0:
+                    for sched in self.algo.scheds:
+                        sched.step()
 
-            if step_env % self.algo.epoch_len == 0:
-                pass
+                if step_env % self.algo.epoch_len == 0:
+                    pass
+
+                n_buffer_iter += 1
 
         # Wait for logging to be finished.
         sleep(10)
