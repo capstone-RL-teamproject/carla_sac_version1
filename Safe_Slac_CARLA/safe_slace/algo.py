@@ -343,6 +343,21 @@ class LatentPolicySafetyCriticSlac:
         torch.nn.utils.clip_grad_norm_(self.safety_critic.parameters(), self.grad_clip_norm)
         self.optim_safety_critic.step()
 
+    def get_parameters(self): #분산학습팀 추가 내용, 파라미터 GET
+        params_info = {}
+        
+        params_info['gamma'] = self.gamma
+        params_info['lr_sac'] = self.lr_sac
+        params_info['batch_size_sac'] = self.batch_size_sac
+        params_info['buffer_size'] = self.buffer_size
+        params_info['tau'] = self.tau
+        params_info['budget'] = self.budget
+
+        params_info['actor_params'] = {name: param.shape for name, param in self.actor.named_parameters()}
+        params_info['critic_params'] = {name: param.shape for name, param in self.critic.named_parameters()}
+        params_info['safety_critic_params'] = {name: param.shape for name, param in self.safety_critic.named_parameters()}
+        params_info['latent_params'] = {name: param.shape for name, param in self.latent.named_parameters()}
+
     def save_model(self, save_dir):
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)

@@ -19,15 +19,14 @@ import json
 from configuration import get_default_config
 
 import ray
-from central import CentralServer
 from gym.envs.registration import register
-import carla_rl_env
+from central import CentralServer
 
 FLAG=True# 삭제해야하는 코드
 
-@ray.remote(num_gpus=1)
+@ray.remote
 class Worker:
-    def __init__(self, worker_id, _args, port, traffic_port):
+    def __init__(self, worker_id, _args, port, traffic_port, central_server):
 
         self.args = _args
         self.config = get_default_config()
@@ -36,8 +35,14 @@ class Worker:
         self.config["seed"] = self.args.seed
         self.config["num_steps"] = self.args.num_steps
 
+        self.central_server = central_server
+        # self.env, _ = ray.get(self.central_server.setup_environment.remote())
+        self.weights = ray.get(self.central_server.update_worker.remote())
+        self.algo = ray.get(self.central_server.initialize_slac_algorithm.remote())
+        self.trainer = ray.get(self.central_server.initialize_trainer.remote(is_worker=True))
+        
         params = {
-            'carla_port': port,
+            'carla_port': self.args.port,
             'traffic_port': traffic_port,
             'map_name': 'Town10HD',
             'window_resolution': [1080, 1080],
@@ -49,54 +54,18 @@ class Worker:
             'num_vehicles': 50,
             'num_pedestrians': 20,
             'enable_route_planner': True,
-            'sensors_to_amount': ['left_rgb','front_rgb', 'right_rgb','top_rgb','lidar','radar'],
+            'sensors_to_amount': ['left_rgb', 'front_rgb', 'right_rgb', 'top_rgb', 'lidar', 'radar'],
         }
 
-        self.parameter_server = ray.get_actor("CentralServer", namespace="parameter_server_namespace")
-
-        # env params
-        self.params = params
-
-        register(
-            id='CarlaRlEnv-v0',
-            entry_point='carla_rl_env.carla_env:CarlaRlEnv',
-            max_episode_steps=1000,
-        )
-
-        self.env = WrappedGymEnv(gym.make(self.args.domain_name, params=self.params),
-                            action_repeat=self.args.action_repeat,image_size=64)
-        self.env_test = self.env
-
-
+        # 환경 설정
+        self.env = WrappedGymEnv(gym.make(self.args.domain_name, params=params), 
+                             action_repeat=self.args.action_repeat, 
+                             image_size=64) #traffic port 때문에 central에서 안받아옴
+        
         self.log_dir = os.path.join(
             "logs",
             f"{self.config['domain_name']}-{self.config['task_name']}",
             f'slac-seed{self.config["seed"]}-{datetime.now().strftime("%Y%m%d-%H%M")}',
-        )
-        self.algo = LatentPolicySafetyCriticSlac(
-            num_sequences=self.config["num_sequences"],
-            gamma_c=self.config["gamma_c"],
-            state_shape=self.env.observation_space.shape,
-            ometer_shape=self.env.ometer_space.shape,
-            tgt_state_shape=self.env.tgt_state_space.shape,
-            action_shape=self.env.action_space.shape,
-            action_repeat=self.config["action_repeat"],
-            device=torch.device("cuda" if self.args.cuda else "cpu"),
-            seed=self.config["seed"],
-            parameter_server=self.parameter_server,
-            buffer_size=self.config["buffer_size"],
-            feature_dim=self.config["feature_dim"],
-            z2_dim=self.config["z2_dim"],
-            hidden_units=self.config["hidden_units"],
-            batch_size_latent=self.config["batch_size_latent"],
-            batch_size_sac=self.config["batch_size_sac"],
-            lr_sac=self.config["lr_sac"],
-            lr_latent=self.config["lr_latent"],
-            start_alpha=self.config["start_alpha"],
-            start_lagrange=self.config["start_lagrange"],
-            grad_clip_norm=self.config["grad_clip_norm"],
-            tau=self.config["tau"],
-            image_noise=self.config["image_noise"],
         )
 
         self.algo.load_model("logs/tmp")
@@ -107,7 +76,6 @@ class Worker:
             env_test=self.env_test,
             algo=self.algo,
             log_dir=self.log_dir,
-            parameter_server=self.parameter_server,
             seed=self.config["seed"],
             num_steps=self.config["num_steps"],
             initial_learning_steps=self.config["initial_learning_steps"],
@@ -118,7 +86,6 @@ class Worker:
             action_repeat=self.config["action_repeat"],
             train_steps_per_iter=self.config["train_steps_per_iter"],
             env_steps_per_train_step=self.config["env_steps_per_train_step"],
-            is_worker = True
         )
 
     def update_policy(self, new_weights):
@@ -141,10 +108,9 @@ class Worker:
         for name, param in self.algo.latent.named_parameters():
             param.data.copy_(torch.from_numpy(new_weights['latent'][name]))
         
-    def train(self):
-        print("ggggggggg")
-        self.trainer.train()
-        print("ddddddddddd")
+    def train(self, parameter_server):
+        self.trainer.train(parameter_server, use_update=False)
+
 
 
 def main():
@@ -164,36 +130,44 @@ def main():
 
     num_workers = args.num_workers
 
-    ray.shutdown()
-    ray.init(namespace="parameter_server_namespace")
-
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    config = get_default_config()  # 기본 설정값 불러오기
+    
+    # Ray 초기화
+    ray.init(log_to_driver=True, logging_level="DEBUG")
 
-    parameter_server = CentralServer.options(
+    # Central Server 초기화
+    central = CentralServer.options(
         name="CentralServer",
-        namespace="parameter_server_namespace",  # 네임스페이스 추가
-        lifetime="detached"
-    ).remote(args, device, expected_workers=num_workers)
-    ray.get(parameter_server.ready.remote())
+        namespace="central_namespace",
+        lifetime="detached"  
+    ).remote(args, device) 
+    print("Central server initialized.")
+    print(central)
+    # 환경 초기화
+    # env, env_test = central.setup_environment.remote()
+    # print("Environment initialized.")
+
 
     workers = []
     for worker_id in range(num_workers):
-        port = args.port + worker_id * 100 + 100
+        port = args.port + worker_id * 100
         print(port)
         traffic_port = args.traffic_port + worker_id * 100
-        worker = Worker.remote(worker_id, args, port, traffic_port)
+        worker = Worker.remote(worker_id, args, port, traffic_port, central)
         workers.append(worker)
+    print(workers)
 
     # 각 워커에서 학습 시작
-    train_ids = [worker.train.remote() for worker in workers]
-    # ray.get(train_ids)
+    train_ids = [worker.train.remote(central) for worker in workers]
 
     print("Central server is ready to collect parameters...")
     print("Current actors:", ray.util.list_named_actors())
 
     while True:
-        parameter_server.train.remote()
-        time.sleep(5)
+        central.train.remote()
+
 
 if __name__ == '__main__':
     main()

@@ -14,8 +14,7 @@ import gym
 from safe_slace.trainer import Trainer
 import json
 from configuration import get_default_config
-
-
+import carla_rl_env
 
 def main(args):
     config = get_default_config()
@@ -24,6 +23,7 @@ def main(args):
     config["seed"] = args.seed
     config["num_steps"] = args.num_steps
 
+
     # env params
     params = {
         'carla_port': 2000,
@@ -31,8 +31,8 @@ def main(args):
         'window_resolution': [1080, 1080],
         'grid_size': [3, 3],
         'sync': True,
-        'no_render': True,
-        'display_sensor': False,
+        'no_render': False,
+        'display_sensor': True,
         'ego_filter': 'vehicle.tesla.model3',
         'num_vehicles': 50,
         'num_pedestrians': 20,

@@ -6,11 +6,11 @@ import time
 import gym
 from gym.spaces import Dict, Discrete, Box, Tuple
 import carla
-from hud import HUD,PIXELS_PER_METER,PIXELS_AHEAD_VEHICLE
+from .hud import HUD,PIXELS_PER_METER,PIXELS_AHEAD_VEHICLE
 
-from Planner import RoutePlanner
-from sensor import SensorManager
-from controller import VehiclePIDController
+from .Planner import RoutePlanner
+from .sensor import SensorManager
+from .controller import VehiclePIDController
 """
 SAC algorithm for CARLA ENV 
 

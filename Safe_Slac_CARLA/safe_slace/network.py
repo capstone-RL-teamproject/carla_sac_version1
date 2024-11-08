@@ -1,8 +1,8 @@
 import numpy as np
 import torch
 from torch import nn
-from Weight_Intializer import initialize_weight
-from ..utils import build_mlp, reparameterize
+from .Weight_Intializer import initialize_weight
+from utils import build_mlp, reparameterize
 
 
 class LatentGaussianPolicy(nn.Module):

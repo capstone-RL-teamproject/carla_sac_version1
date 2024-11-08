@@ -3,8 +3,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 import math
-from Weight_Intializer import initialize_weight
-from ..utils import build_mlp,calculate_kl_divergence
+from .Weight_Intializer import initialize_weight
+from utils import build_mlp,calculate_kl_divergence
 
 class FixedGaussian(nn.Module):
     """

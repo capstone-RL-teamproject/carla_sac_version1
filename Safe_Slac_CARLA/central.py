@@ -27,6 +27,7 @@ class CentralServer:
     def __init__(self, args, device, expected_workers=2):
         self.args = args
         self.config = get_default_config()
+        #print(self.config)
         self.expected_workers = expected_workers
         self.is_ready = True
 
@@ -52,9 +53,14 @@ class CentralServer:
         print("ParameterServer initialized successfully.")
 
     def setup_environment(self):
-        # 칼라환경 파라미터 정의
+        #칼라환경 파라미터 정의
+        self.config["domain_name"] = self.args.domain_name
+        self.config["task_name"] = self.args.task_name
+        self.config["seed"] = self.args.seed
+        self.config["num_steps"] = self.args.num_steps
+
         params = {
-            'carla_port': self.args.port,
+            'carla_port': 3000,
             'map_name': 'Town10HD',
             'window_resolution': [1080, 1080],
             'grid_size': [3, 3],
@@ -108,13 +114,12 @@ class CentralServer:
             grad_clip_norm=self.config["grad_clip_norm"],
             tau=self.config["tau"],
             image_noise=self.config["image_noise"],
-            is_worker=False
         )
 
     def load_model(self): #사전 훈련 모델 로드
         self.algo.load_model("logs/tmp")
 
-    def initialize_trainer(self):
+    def initialize_trainer(self, is_worker = False):
         trainer = Trainer(
             num_sequences=self.config["num_sequences"],
             env=self.env,
