@@ -342,6 +342,17 @@ class LatentPolicySafetyCriticSlac:
         self.loss_safety_critic.backward(retain_graph=False)
         torch.nn.utils.clip_grad_norm_(self.safety_critic.parameters(), self.grad_clip_norm)
         self.optim_safety_critic.step()
+        
+    def get_parameters(self): #분산학습팀 추가 내용, 파라미터 GET, 함수가 아니라 값이 어떻게 가져와지는 수정
+        params_info = {
+        'actor': self.actor.state_dict(),
+        'critic': self.critic.state_dict(),
+        'critic_target': self.critic_target.state_dict(),
+        'safety_critic': self.safety_critic.state_dict(),
+        'safety_critic_target': self.safety_critic_target.state_dict(),
+        'latent': self.latent.state_dict()
+        }   
+        return params_info
 
     def save_model(self, save_dir):
         if not os.path.exists(save_dir):
