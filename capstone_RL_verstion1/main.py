@@ -16,7 +16,7 @@ from gym.envs.registration import register
 
 FLAG=True# 삭제해야하는 코드
 
-@ray.remote
+@ray.remote(num_gpus=0.3, num_cpus=1)
 class Worker:
     def __init__(self, worker_id, _params, _args, file_name, port, traffic_port):
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -42,8 +42,9 @@ class Worker:
 
         self.env = WrappedGymEnv(gym.make("CarlaRlEnv-v0", params=self.params), self.args)
 
-        self.writer = SummaryWriter(log_dir=f"./results/{file_name}")
-        self.args.summary_writer = self.writer
+        # self.writer = SummaryWriter(log_dir=f"./results/{file_name}")
+        # self.args.summary_writer = self.writer
+        
 
         self.args.action_shape = self.env.action_space.shape[0]
         self.args.action_scale = self.env.action_scale
@@ -80,7 +81,7 @@ class Worker:
         FLAG = True  # 삭제해야하는 코드
 
         step_counter = 0  # 스텝 카운터 초기화
-
+        
         for t in range(int(self.args.max_timesteps)):
 
             state = self.env.reset()
@@ -117,26 +118,13 @@ class Worker:
                 print(f"{self.id}번 워커의 step: {step_counter}")
 
                 # 주기적으로 파라미터 동기화
-                if step_counter % self.args.sync_freq == 0:
-                    new_weights = ray.get(self.central_server.get_policy_weights.remote())
-                    self.update_policy(new_weights)
-                    print(f"{self.id}번 워커가 스텝 {step_counter}에서 중앙 서버로부터 policy 업데이트.")
+            if step_counter % self.args.sync_freq == 0:
+                new_weights = ray.get(self.central_server.get_policy_weights.remote())
+                self.update_policy(new_weights)
+                print(f"{self.id}번 워커가 스텝 {step_counter}에서 중앙 서버로부터 policy 업데이트.")
 
-                # Evaluate episode
-                if (t + 1) % self.args.eval_freq == 0:
-                    print("\nEvaluate score\n")
-                    avg_reward, avg_cost = eval_policy(self.policy, self.env)
-                    if self.args.write:
-                        self.args.summary_writer.add_scalar('eval reward', avg_reward, global_step=t)
-                        self.args.summary_writer.add_scalar('episode_reward', episode_reward, global_step=t)
-                        self.args.summary_writer.add_scalar('eval_cost', avg_cost, global_step=t)
-                        self.args.summary_writer.add_scalar('episode_cost', episode_cost, global_step=t)
-                        self.args.summary_writer.add_scalar('BUFFER_alpha', self.BUFFER_ALPHA, global_step=t)
-                        self.args.summary_writer.add_scalar('beta', self.BETA, global_step=t)
-
-                    self.policy.save(f"./models/{self.file_name}")
-                    print('writer add scalar and save model   ', 'steps: {}k'.format(int(t / 1000)), 'AVG reward:', int(avg_reward), 'AVG cost:', int(avg_cost))
-                    t = t + 1
+            #리워드 보내주기(episode_reward)
+            self.central_server.add_reward.remote(reward,t)
 
             print(f"\n--------{self.id}--- timestep : {t} reward : {episode_reward}  cost : {episode_cost}--------\n")
 
@@ -211,11 +199,11 @@ def main():
         'carla_port': args.port,
         'traffic_port': args.traffic_port,
         'map_name': 'Town10HD',
-        'window_resolution': [1080, 1080],
+        'window_resolution': [480, 480],
         'grid_size': [3, 3],
         'sync': True,
-        'no_render': False,
-        'display_sensor': True,
+        'no_render': True,
+        'display_sensor': False,
         'ego_filter': 'vehicle.tesla.model3',
         'num_vehicles': 50,
         'num_pedestrians': 20,
@@ -225,8 +213,11 @@ def main():
 
     num_workers = 2
 
+    existing_actor = ray.get_actor("ParameterServer", namespace="parameter_server_namespace")
+    ray.kill(existing_actor)
+
     ray.shutdown()
-    ray.init(namespace="parameter_server_namespace")
+    ray.init(address='auto', namespace="parameter_server_namespace", include_dashboard=True)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -254,9 +245,9 @@ def main():
         traffic_port = args.traffic_port + worker_id * 100
         worker = Worker.remote(worker_id, params, args, file_name, port, traffic_port)
         workers.append(worker)
-
+    print(workers)
     # 각 워커에서 학습 시작
-    train_ids = [worker.train.remote() for worker in workers]
+    train_ids = [worker.train.remote() for worker in workers] #worker.train에서 스텝과 서버로부터 policy 업데이트 출력
 
     print("Central server is ready to collect parameters...")
     print("Current actors:", ray.util.list_named_actors())
@@ -264,7 +255,8 @@ def main():
     t = 0
     while True:
         # 정책 학습 수행
-        central_server.train_policy.remote(t)
+
+        central_server.train_policy.remote(t) #
         t += 1
         time.sleep(5)
 
