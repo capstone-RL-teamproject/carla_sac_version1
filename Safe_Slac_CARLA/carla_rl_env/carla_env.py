@@ -6,11 +6,11 @@ import time
 import gym
 from gym.spaces import Dict, Discrete, Box, Tuple
 import carla
-from hud import HUD,PIXELS_PER_METER,PIXELS_AHEAD_VEHICLE
+from .hud import HUD,PIXELS_PER_METER,PIXELS_AHEAD_VEHICLE, MapImage
 
-from Planner import RoutePlanner
-from sensor import SensorManager
-from controller import VehiclePIDController
+from .Planner import RoutePlanner
+from .sensor import SensorManager
+from .controller import VehiclePIDController
 """
 SAC algorithm for CARLA ENV 
 
@@ -145,6 +145,10 @@ class CarlaRlEnv(gym.Env):
         self.spawn_points = self.map.get_spawn_points()  #
         self.original_settings = self.world.get_settings()  #
 
+        selected_locations = self.get_clicked_locations(self.map)
+        self.start_point = selected_locations[0]
+        self.target_point = selected_locations[1]
+        
         if self.no_render:
             settings = self.world.get_settings()
             settings.no_rendering_mode = True
@@ -205,6 +209,8 @@ class CarlaRlEnv(gym.Env):
             'trgt_pos': Box(-np.inf, np.inf, shape=(3,), dtype=np.float32),
             'wp_hrz': Box(-np.inf, np.inf, shape=(40, 2), dtype=np.float32)
         })
+        
+        
 
     def step(self, action):
         self.current_step += 1
@@ -436,7 +442,8 @@ class CarlaRlEnv(gym.Env):
         return self.reward, self.done, self.cost
 
     def create_all_actors(self):
-        self.target_pos = TargetPosition(carla.Transform(carla.Location(-114.23, 53.82, 0.6), carla.Rotation(0.0, 90.0, 0.0))) # 지도에서 목표지점 위치 알아내서 이곳에 넘겨야함
+        self.target_pos = TargetPosition(self.target_point)
+        #self.target_pos = TargetPosition(carla.Transform(carla.Location(-114.23, 53.82, 0.6), carla.Rotation(0.0, 90.0, 0.0))) # 지도에서 목표지점 위치 알아내서 이곳에 넘겨야함
         #self.target_pos.set_transform(random.choice(self.spawn_points))
 
         # create ego vehicle
@@ -449,7 +456,7 @@ class CarlaRlEnv(gym.Env):
         #    time.sleep(0.1)
 
         while self.ego_vehicle is None:
-            self.ego_vehicle = self.world.try_spawn_actor(ego_vehicle_bp, carla.Transform(carla.Location(-18.386, 130.21, 0.546),carla.Rotation(0.0, -180.0, 0.0)))
+            self.ego_vehicle = self.world.try_spawn_actor(ego_vehicle_bp, self.start_point)
             # time.sleep(0.1)
 
         self.vehicle_list.append(self.ego_vehicle)
@@ -675,3 +682,154 @@ class CarlaRlEnv(gym.Env):
         act[1] = control.steer
 
         return act
+    
+    def draw_spawn_points(self, surface, spawn_points, world_to_pixel, scale_x, scale_y, selected_indices):
+        """스폰 포인트를 미니맵에 그리는 함수"""
+        default_color = pygame.Color(255, 0, 0)  # 기본 빨간색
+        selected_color = pygame.Color(0, 255, 0)  # 선택된 색 (초록색)
+
+        for index, spawn_point in enumerate(spawn_points):
+            # 스폰 포인트의 월드 좌표를 픽셀 좌표로 변환
+            pixel_pos = world_to_pixel(spawn_point.location)
+            scaled_pixel_pos = [int(pixel_pos[0] * scale_x), int(pixel_pos[1] * scale_y)]
+
+            # 색상 선택
+            color = selected_color if index in selected_indices else default_color
+
+            # 스케일이 적용된 좌표에 스폰 포인트 그리기
+            pygame.draw.circle(surface, color, scaled_pixel_pos, 5)  # 원의 크기를 5로 설정
+
+    def get_clicked_locations(self, carla_map):
+        # Pygame 초기화
+        pygame.init()
+        screen = pygame.display.set_mode((800, 800))
+
+        # 픽셀 당 미터 설정
+        PIXELS_PER_METER = 12
+        map_image = MapImage(self.world, carla_map, PIXELS_PER_METER)
+
+        spawn_points = carla_map.get_spawn_points()
+
+        map_width = map_image.surface.get_width()
+        map_height = map_image.surface.get_height()
+        scale_x = 800 / map_width
+        scale_y = 800 / map_height
+
+        running = True
+        selected_indices = []
+
+        while running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    mouse_x, mouse_y = event.pos
+                    map_x = mouse_x / scale_x
+                    map_y = mouse_y / scale_y
+                    clicked_world_location = map_image.pixel_to_world((map_x, map_y))
+
+                    closest_spawn_point = None
+                    closest_distance = float('inf')
+                    
+                    for index, spawn_point in enumerate(spawn_points):
+                        distance = clicked_world_location.distance(spawn_point.location)
+                        if distance < closest_distance:
+                            closest_distance = distance
+                            closest_spawn_point = spawn_point
+                            closest_index = index
+
+                    # 클릭한 위치와 가까운 스폰 포인트가 5m 이내일 때
+                    if closest_spawn_point and closest_distance < 5.0:
+                        if closest_index not in selected_indices:
+                            selected_indices.append(closest_index)
+                            print(f"선택된 스폰 포인트의 CARLA 좌표: {closest_spawn_point.location}")
+
+                    # 두 개의 스폰 포인트가 선택되면 종료
+                    if len(selected_indices) == 2:
+                        running = False
+
+            screen.fill((0, 0, 0))  # 검은색 배경으로 초기화
+            scaled_map_surface = pygame.transform.scale(map_image.surface, (800, 800))
+            screen.blit(scaled_map_surface, (0, 0))
+
+            # 스폰 포인트 그리기
+            self.draw_spawn_points(screen, spawn_points, map_image.world_to_pixel, scale_x, scale_y, selected_indices)
+
+            # Pygame 화면 업데이트
+            pygame.display.flip()
+
+        pygame.quit()
+
+        # 선택된 스폰 포인트의 위치를 리스트로 반환
+        selected_locations = [spawn_points[i] for i in selected_indices]
+        return selected_locations  # 튜플 대신 리스트로 반환
+    
+    # def update_end_point(self):
+    #     """
+    #     학습 중간에 end_point를 미니맵을 클릭하여 변경할 수 있는 함수
+    #     """
+    #     pygame.init()
+    #     screen = pygame.display.set_mode((800, 800))
+
+    #     PIXELS_PER_METER = 12
+    #     map_image = MapImage(self.world, self.map, PIXELS_PER_METER)
+    #     spawn_points = self.map.get_spawn_points()
+
+    #     map_width = map_image.surface.get_width()
+    #     map_height = map_image.surface.get_height()
+    #     scale_x = 800 / map_width
+    #     scale_y = 800 / map_height
+
+    #     running = True
+    #     selected_location = None
+
+    #     while running:
+    #         for event in pygame.event.get():
+    #             if event.type == pygame.QUIT:
+    #                 running = False
+                
+    #             elif event.type == pygame.MOUSEBUTTONDOWN:
+    #                 mouse_x, mouse_y = event.pos
+    #                 map_x = mouse_x / scale_x
+    #                 map_y = mouse_y / scale_y
+    #                 clicked_world_location = map_image.pixel_to_world((map_x, map_y))
+
+    #                 closest_spawn_point = None
+    #                 closest_distance = float('inf')
+                    
+    #                 for spawn_point in spawn_points:
+    #                     distance = clicked_world_location.distance(spawn_point.location)
+    #                     if distance < closest_distance:
+    #                         closest_distance = distance
+    #                         closest_spawn_point = spawn_point
+
+    #                 # 클릭한 위치와 가까운 스폰 포인트가 5m 이내일 때
+    #                 if closest_spawn_point and closest_distance < 5.0:
+    #                     selected_location = closest_spawn_point
+    #                     print(f"새로운 end_point의 CARLA 좌표: {selected_location.location}")
+    #                     running = False
+
+    #         screen.fill((0, 0, 0))  # 검은색 배경으로 초기화
+    #         scaled_map_surface = pygame.transform.scale(map_image.surface, (800, 800))
+    #         screen.blit(scaled_map_surface, (0, 0))
+
+    #         # 스폰 포인트 그리기 (기존 선택된 지점을 강조 표시할 수도 있음)
+    #         self.draw_spawn_points(screen, spawn_points, map_image.world_to_pixel, scale_x, scale_y, [])
+
+    #         pygame.display.flip()
+
+    #     pygame.quit()
+
+    #     # 새로운 end_point 설정
+    #     if selected_location:
+    #         self.target_point = selected_location
+    #         self.update_route_planner()
+
+    # def update_route_planner(self):
+    #     """
+    #     새로운 end_point에 따라 경로 계획을 업데이트하는 함수
+    #     """
+    #     self.waypoints = self.route_planner_global.trace_route(self.ego_vehicle.get_location(), self.target_point.location)
+    #     self.last_waypoints_len = len(self.waypoints)
+    #     print("경로 계획이 업데이트되었습니다.")

@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
-from ..utils import sample_reproduction
+from utils import sample_reproduction
 from PIL import Image
 from copy import deepcopy
 

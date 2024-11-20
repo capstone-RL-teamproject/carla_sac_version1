@@ -4,11 +4,11 @@ import numpy as np
 import torch
 from torch.optim import Adam, SGD
 from torch.optim.lr_scheduler import MultiStepLR
-from ReplayBuffer import CostReplayBuffer
-from network import GaussianPolicy, TwinnedQNetwork, SingleQNetwork,LatentGaussianPolicy
-from latent import CostLatentModel
+from .ReplayBuffer import CostReplayBuffer
+from .network import GaussianPolicy, TwinnedQNetwork, SingleQNetwork,LatentGaussianPolicy
+from .latent import CostLatentModel
 
-from ..utils import create_feature_actions, grad_false, soft_update
+from utils import create_feature_actions, grad_false, soft_update
 from collections import defaultdict
 import torch.nn.functional
 
