@@ -9,6 +9,8 @@ import time
 import argparse
 from safe_slace.algo import LatentPolicySafetyCriticSlac
 import torch
+import os
+from datetime import datetime
 
 from WrappedGymEnv import WrappedGymEnv
 import gym
@@ -18,12 +20,10 @@ from configuration import get_default_config
 import carla_rl_env
 from configuration import get_default_config
 
-FLAG=True# 삭제해야하는 코드
-
 
 # 통합을 담당하는 Actor 정의
 @ray.remote(num_gpus=1)
-class ParameterServer:
+class CentralServer:
     def __init__(self, args, expected_workers=2):
         self.args = args
         self.expected_workers = expected_workers
@@ -47,7 +47,7 @@ class ParameterServer:
         print("ParameterServer initialized successfully.")
 
     def setup_environment(self):
-        # 환경 파라미터 정의
+        # 칼라환경 파라미터 정의
         params = {
             'carla_port': 2000,
             'map_name': 'Town10HD',
@@ -71,95 +71,103 @@ class ParameterServer:
         
         return env, env_test
 
-    def setup_log_directory(self):
+    def setup_log_directory(self): #로그 저장 디렉토리 설정
         return os.path.join(
             "logs",
             f"{self.args.domain_name}-{self.args.task_name}",
             f'slac-seed{self.args.seed}-{datetime.now().strftime("%Y%m%d-%H%M")}',
         )
 
-    def initialize_slac_algorithm(self):
+    def initialize_slac_algorithm(self, config): #알고리즘 초기화, 상태 및 행동공간 형태도 지정
         return LatentPolicySafetyCriticSlac(
             state_shape=self.env.observation_space.shape,
             ometer_shape=self.env.ometer_space.shape,
             tgt_state_shape=self.env.tgt_state_space.shape,
             action_shape=self.env.action_space.shape,
-            action_repeat=self.args.action_repeat,
-            device=torch.device("cuda" if self.args.cuda else "cpu"),
-            seed=self.args.seed,
-            buffer_size=self.args.buffer_size,
-            num_sequences=self.args.num_sequences,
-            feature_dim=self.args.feature_dim,
-            z1_dim=self.args.z1_dim,
-            z2_dim=self.args.z2_dim,
-            hidden_units=self.args.hidden_units,
-            batch_size_latent=self.args.batch_size_latent,
-            batch_size_sac=self.args.batch_size_sac,
-            lr_sac=self.args.lr_sac,
-            lr_latent=self.args.lr_latent,
-            start_alpha=self.args.start_alpha,
-            start_lagrange=self.args.start_lagrange,
-            grad_clip_norm=self.args.grad_clip_norm,
-            tau=self.args.tau,
-            image_noise=self.args.image_noise,
+            action_repeat=config["action_repeat"],
+            device=torch.device("cuda" if config["cuda"] else "cpu"),
+            seed=config["seed"],
+            buffer_size=config["buffer_size"],
+            num_sequences=config["num_sequences"],
+            feature_dim=config["feature_dim"],
+            z1_dim=config["z1_dim"],
+            z2_dim=config["z2_dim"],
+            hidden_units=config["hidden_units"],
+            batch_size_latent=config["batch_size_latent"],
+            batch_size_sac=config["batch_size_sac"],
+            lr_sac=config["lr_sac"],
+            lr_latent=config["lr_latent"],
+            start_alpha=config["start_alpha"],
+            start_lagrange=config["start_lagrange"],
+            grad_clip_norm=config["grad_clip_norm"],
+            tau=config["tau"],
+            image_noise=config["image_noise"],
         )
 
-    def load_model(self):
+    def load_model(self): #사전 훈련 모델 로드
         self.algo.load_model("logs/tmp")
 
     def initialize_trainer(self):
-        return Trainer(
-            num_sequences=self.args.num_sequences,
-            env=self.env,
-            env_test=self.env_test,
-            algo=self.algo,
-            log_dir=self.log_dir,
-            seed=self.args.seed,
-            num_steps=self.args.num_steps,
-            initial_learning_steps=self.args.initial_learning_steps,
-            initial_collection_steps=self.args.initial_collection_steps,
-            collect_with_policy=self.args.collect_with_policy,
-            eval_interval=self.args.eval_interval,
-            num_eval_episodes=self.args.num_eval_episodes,
-            action_repeat=self.args.action_repeat,
-            train_steps_per_iter=self.args.train_steps_per_iter,
-            env_steps_per_train_step=self.args.env_steps_per_train_step
+        trainer = Trainer(
+        num_sequences=config["num_sequences"],
+        env=env,
+        env_test=env_test,
+        algo=algo,
+        log_dir=log_dir,
+        seed=config["seed"],
+        num_steps=config["num_steps"],
+        initial_learning_steps=config["initial_learning_steps"],
+        initial_collection_steps=config["initial_collection_steps"],
+        collect_with_policy=config["collect_with_policy"],
+        eval_interval=config["eval_interval"],
+        num_eval_episodes=config["num_eval_episodes"],
+        action_repeat=config["action_repeat"],
+        train_steps_per_iter=config["train_steps_per_iter"],
+        env_steps_per_train_step=config["env_steps_per_train_step"]
         )
+        return trainer
 
     def add_experience(self, experience): # 워커의 experience가 저장, woker에서 실행되는 코드
         self.buffer.add(experience)
 
+    def train(self):
+        trainer = self.initialize_trainer()
+        while True:
+            if self.buffer_has_data():
+                trainer.train()
+            time.sleep(5)
+        #학습 시에 버퍼의 데이터는 어떻게 처리할지
 
-    #예전코드
-    def update_hyperparameters(self, t):
-        self.BETA = self.beta_scheduler.value(t)
-        td_errors = self.buffer.buffer[:len(self.buffer)]["priority"]
-        td_mean = np.mean(td_errors)
-        td_std = np.std(td_errors)
-        self.BUFFER_ALPHA = self.buffer_alpha_scheduler.value(td_mean, td_std)
-
-    def train_policy(self, t): #
-        if len(self.buffer) > self.batch_size and t > self.start_timesteps:
-
-            print(f"policy 업데이트. 경험 개수: {len(self.buffer)}")
-            self.policy.train(self.BETA, self.BUFFER_ALPHA, self.buffer)
-            self.update_hyperparameters(t)
-         
-            # Actor lr scheduler
-            for p in self.policy.actor_optimizer.param_groups:
-                p['lr'] = self.actor_lr_scheduler.value(t)
-
-            # Critic lr scheduler
-            for p in self.policy.critic_optimizer.param_groups:
-                p['lr'] = self.critic_lr_scheduler.value(t)
-
-            for p in self.policy.critic_optimizer2.param_groups:
-                p['lr'] = self.critic_lr_scheduler.value(t)
+    def buffer_has_data(self):
+        return len(self.buffer) > self.args.batch_size
     
-    def get_policy_weights(self):
-        weights = {}
-        weights['actor'] = {name: param.detach().cpu().numpy() for name, param in self.policy.actor.named_parameters()}
-        weights['critic1'] = {name: param.detach().cpu().numpy() for name, param in self.policy.critic.named_parameters()}
-        weights['critic2'] = {name: param.detach().cpu().numpy() for name, param in self.policy.critic2.named_parameters()}
-        weights['log_alpha'] = self.policy.log_alpha.detach().cpu().numpy()
-        return weights
+    #워커에서 요청할 때 센트럴에서 함수가 필요한지 질문
+    def update_worker(self):
+        updated_parameters = self.algo.get_parameters()
+
+        return updated_parameters
+
+def main():
+    config = get_default_config()
+    '''config["domain_name"] = args.domain_name
+    config["task_name"] = args.task_name
+    config["seed"] = args.seed
+    config["num_steps"] = args.num_steps'''
+
+    ray.init()
+
+    central = CentralServer.remote(config)
+    # 환경 초기화
+    env, env_test = ray.get(central.setup_environment.remote())
+    print("Environment initialized.")
+                  
+    # 트레이너 생성
+    trainer = ray.get(central.initialize_trainer.remote(config))
+    print("Trainer initialized.")
+
+    # 학습 시작
+    # 이 코드는 중앙 서버가 학습을 시작하도록 합니다.
+    ray.get(central.train.remote())
+    print("Training started.")
+    
+
