@@ -1,4 +1,7 @@
 ray[rllib]>=2.5.0
-torch>=1.12.0
+torch>=2.0.0
 gymnasium>=0.28.1
 numpy>=1.21.0
+carla==0.9.15
+opencv-python>=4.8.0
+tensorboard>=2.10.0
