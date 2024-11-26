@@ -227,6 +227,21 @@ class CarlaRlEnv(gym.Env):
 
         self.ego_vehicle.apply_control(act)
 
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                mouse_pos = event.pos
+                clicked_spawn_point = self.hud.get_clicked_spawn_point(mouse_pos)
+                if clicked_spawn_point is not None:
+                    self.target_point = clicked_spawn_point
+                    print(f"New target position set: {self.target_pos.transform.location}")
+
+                    
+
+        
+        
         self.world.tick()
 
         reward, done, cost = self.deal_with_reward_and_done()
@@ -536,10 +551,12 @@ class CarlaRlEnv(gym.Env):
         self.hud = HUD(self.world,
                        PIXELS_PER_METER,
                        PIXELS_AHEAD_VEHICLE,
-                       self.display_size, [2, 0], [2, 2],
+                       self.display_size, [2, 0], [1, 1],
                        self.ego_vehicle,
                        self.target_pos.transform,
-                       self.waypoints)
+                       self.waypoints,
+                       self.spawn_points,
+                       self.display_manager)
 
         self.display_manager.add_birdeyeview(self.hud)
 

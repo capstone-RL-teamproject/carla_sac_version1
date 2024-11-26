@@ -596,7 +596,7 @@ class MapImage(object):
 
 
 class HUD(object):
-    def __init__(self,world,pixels_per_meter,pixels_ahead_vehicle,display_size,display_pos,display_pos_global,lead_actor,target_transform,waypoints=None):
+    def __init__(self,world,pixels_per_meter,pixels_ahead_vehicle,display_size,display_pos,display_pos_global,lead_actor,target_transform,waypoints=None,spawn_points=None, display_manager=None):
 
         self.world = world
         self.pixels_per_meter = pixels_per_meter
@@ -607,7 +607,8 @@ class HUD(object):
         self.lead_actor = lead_actor
         self.target_transform = target_transform
         self.waypoints = waypoints
-
+        self.spawn_points = spawn_points
+        self.display_manager = display_manager
 
         self.server_clock = pygame.time.Clock()
         self.surface = pygame.Surface(display_size).convert()
@@ -796,6 +797,47 @@ class HUD(object):
         location = world_to_pixel(self.lead_actor.get_location())
         pygame.draw.circle(surface, colors[1], location, radius_in_pix, 0)
 
+    def draw_spawn_points(self, surface, spawn_points, world_to_pixel, color=COLOR_GREEN):
+        """HUD의 글로벌 뷰에 스폰 포인트를 렌더링"""
+        for point in spawn_points:
+            pixel_location = world_to_pixel(point.location)
+            pygame.draw.circle(surface, color, pixel_location, 20)  # 원의 크기는 5 픽셀
+
+
+    def get_clicked_spawn_point(self, mouse_pos):
+        """마우스 클릭 위치에서 가장 가까운 스폰 포인트를 반환"""
+
+        # HUD의 display_pos_global에 따른 오프셋 보정
+        offset = self.display_manager.get_display_offset(self.display_pos_global)
+
+        # 마우스 클릭 좌표를 HUD의 surface_global 기준으로 변환
+        adjusted_mouse_pos = (mouse_pos[0] - offset[0], mouse_pos[1] - offset[1])
+
+        # Pygame 창 크기와 맵 크기 간의 스케일 계산
+        map_width = self.map_image.surface.get_width()
+        map_height = self.map_image.surface.get_height()
+
+        scale_x = self.display_size[0] / map_width
+        scale_y = self.display_size[1] / map_height
+
+        # 마우스 클릭 위치를 맵 좌표로 변환
+        map_x = adjusted_mouse_pos[0] / scale_x
+        map_y = adjusted_mouse_pos[1] / scale_y
+
+        # 맵 좌표를 CARLA 월드 좌표로 변환
+        world_location = self.map_image.pixel_to_world((map_x, map_y))
+
+        # 가장 가까운 스폰 포인트 찾기
+        closest_point = None
+        closest_distance = float('inf')
+        for spawn_point in self.spawn_points:
+            distance = world_location.distance(spawn_point.location)
+            if distance < closest_distance:
+                closest_distance = distance
+                closest_point = spawn_point
+
+        return closest_point
+
 
     def render_actors(self,surface,vehicles,traffic_lights,walkers):
 
@@ -871,6 +913,8 @@ class HUD(object):
 
         Util.bilts(self.result_surface,surfaces)
 
+        if self.spawn_points is not None:
+            self.draw_spawn_points(self.result_surface, self.spawn_points, self.map_image.world_to_pixel)
         # lead actor surface setting
         self.lead_actor_surface.fill(COLOR_ALUMINIUM_4)
 
