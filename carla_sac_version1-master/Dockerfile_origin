@@ -1,0 +1,12 @@
+FROM python:3.9-slim
+
+
+WORKDIR /root/carla_project
+
+COPY . .
+
+RUN pip install --upgrade pip
+#RUN cat requirements.txt | xargs -n 1 pip install
+RUN cat requirements.txt | xargs -n 1 pip install || true
+
+CMD ["python", "main.py"]
