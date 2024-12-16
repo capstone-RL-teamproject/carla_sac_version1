@@ -11,6 +11,9 @@ from configuration import get_default_config
 import numpy as np
 from collections import deque
 
+import tkinter as tk
+from tkinter import ttk
+
 class SlacObservation:
     """
     Observation for SLAC.
@@ -74,6 +77,45 @@ class SlacObservation:
     @property
     def last_action(self):
         return np.array(self._action[-1])
+    
+def get_weather_selection(options):
+    """Tkinter GUI를 생성하여 날씨 옵션을 선택하게 하는 함수"""
+    # Tkinter 루트 윈도우 생성
+    root = tk.Tk()
+    root.title("Weather Selection")
+
+    # 기본 스타일 설정
+    style = ttk.Style()
+    style.configure("TButton", font=('Sans', 14), padding=10)
+    style.configure("TCombobox", font=('Sans', 14), padding=10)
+    style.configure("TLabel", font=('Sans', 16))
+
+    global selected_weather
+    selected_weather = tk.StringVar(value=options[0])  # 기본값으로 첫 번째 옵션 선택
+
+    # 라벨 추가
+    label = ttk.Label(root, text="Select Weather:", padding=(10, 10))
+    label.pack(pady=10)
+
+    # 드롭다운 메뉴 생성
+    weather_menu = ttk.Combobox(root, textvariable=selected_weather, values=options, width=30)
+    weather_menu.pack(pady=20)
+
+    def apply_weather():
+        """날씨 선택 후 Tkinter 루프를 종료하는 함수"""
+        global chosen_weather
+        chosen_weather = selected_weather.get()  # 선택된 옵션 저장
+        root.destroy()  # Tkinter 루프 종료
+
+    # 선택 완료 버튼 생성
+    select_button = ttk.Button(root, text="Select", command=apply_weather)
+    select_button.pack(pady=10)
+
+    # 윈도우 크기 조정
+    root.geometry("600x300")
+
+    # Tkinter 메인 루프 시작
+    root.mainloop()
 
 def inference(args):
     config = get_default_config()
@@ -81,6 +123,8 @@ def inference(args):
     config["task_name"] = args.task_name
     config["seed"] = args.seed
     config["num_steps"] = args.num_steps
+    
+
     # env params
     params = {
         'carla_port': 2000,
@@ -95,6 +139,7 @@ def inference(args):
         'num_pedestrians': 20,
         'enable_route_planner': True,
         'sensors_to_amount': ['left_rgb', 'front_rgb', 'right_rgb', 'top_rgb', 'lidar', 'radar'],
+        'weather': chosen_weather ,
     }
     from gym.envs.registration import register
 
@@ -171,7 +216,21 @@ def inference(args):
     print(f"Steps:    " f"Return: {mean_reward_return:<5.1f} " f"CostRet: {mean_cost_return:<5.1f}   ")
 
 
+
+
 if __name__=="__main__":
+    weather_options = [
+        "Default", "HardRainNoon", "ClearNight"
+    ]
+    get_weather_selection(weather_options)
+
+    if chosen_weather == "Default":
+        model = "model/default/step1120000"
+    elif chosen_weather == "HardRainNoon":
+        model = "model/rain/step1120000"
+    elif chosen_weather == "ClearNight":
+        model = "model/night/step1120000"
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_steps", type=int, default=2 * 10 ** 6)
     parser.add_argument("--domain_name", type=str, default="CarlaRlEnv-v0")
@@ -181,7 +240,7 @@ if __name__=="__main__":
     parser.add_argument("--cuda", type=str,default="cuda")
 
     parser.add_argument("--num_eval_episodes", type=int,default=30)
-    parser.add_argument("--load_dir", type=str, default="summary/step180000")
+    parser.add_argument("--load_dir", type=str, default=model)
 
     args = parser.parse_args()
     inference(args)

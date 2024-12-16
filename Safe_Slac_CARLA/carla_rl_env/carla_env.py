@@ -130,6 +130,7 @@ class CarlaRlEnv(gym.Env):
         self.num_pedestrians = params['num_pedestrians']
         self.enable_route_planner = params['enable_route_planner']
         self.sensors_to_amount = params['sensors_to_amount']
+        self.selected_weather = params['weather']
 
         # self created resource
         # connet to server
@@ -142,12 +143,14 @@ class CarlaRlEnv(gym.Env):
 
         self.spectator = self.world.get_spectator()  # return spectator actor
         self.map = self.world.get_map()  #
+        weather = getattr(carla.WeatherParameters, self.selected_weather)
+        self.world.set_weather(weather)
         self.spawn_points = self.map.get_spawn_points()  #
         self.original_settings = self.world.get_settings()  #
 
-        selected_locations = self.get_clicked_locations(self.map)
-        self.start_point = selected_locations[0]
-        self.target_point = selected_locations[1]
+        # selected_locations = self.get_clicked_locations(self.map)
+        # self.start_point = selected_locations[0]
+        # self.target_point = selected_locations[1]
         
         if self.no_render:
             settings = self.world.get_settings()
@@ -221,7 +224,9 @@ class CarlaRlEnv(gym.Env):
         trn = action[0][2]
         rvs = action[1][0]
 
-
+        transform = self.ego_vehicle.get_transform()
+        self.spectator.set_transform(carla.Transform(transform.location + carla.Location(z=50),carla.Rotation(pitch=-90)))
+        
 
         act = carla.VehicleControl(throttle=float(acc), steer=float(trn), brake=float(brk), reverse=bool(rvs))
 
@@ -398,11 +403,11 @@ class CarlaRlEnv(gym.Env):
             lane_invasion_cost = 1.0
 
         # traffic light
-        if self.ego_vehicle.is_at_traffic_light():
-           self.done = True
-           cross_red_light_reward = -1.0
-        else:
-           cross_red_light_reward = 0.0
+        # if self.ego_vehicle.is_at_traffic_light():
+        #    self.done = True
+        #    cross_red_light_reward = -1.0
+        # else:
+        #    cross_red_light_reward = 0.0
 
         # speed limit
         current_velocity = self.ego_vehicle.get_velocity()
@@ -450,15 +455,15 @@ class CarlaRlEnv(gym.Env):
 
 
 
-        self.reward = 0.1 * time_reward + 200.0 * arriving_reward + 2.0 * off_way_reward + 0.1 * speed_reward + 3.0 * steer_reward + 0.5 * lat_acc_reward + 3.0 * waypoints_len_reward + 100.0*cross_red_light_reward
+        self.reward = 0.1 * time_reward + 200.0 * arriving_reward + 2.0 * off_way_reward + 0.1 * speed_reward + 3.0 * steer_reward + 0.5 * lat_acc_reward + 3.0 * waypoints_len_reward + 100.0#*cross_red_light_reward
 
-        self.cost = 200.0 * collision_cost + 10.0 * lane_invasion_cost -100.0*cross_red_light_reward
+        self.cost = 200.0 * collision_cost + 10.0 * lane_invasion_cost -100.0#*cross_red_light_reward
 
         return self.reward, self.done, self.cost
 
     def create_all_actors(self):
-        self.target_pos = TargetPosition(self.target_point)
-        #self.target_pos = TargetPosition(carla.Transform(carla.Location(-114.23, 53.82, 0.6), carla.Rotation(0.0, 90.0, 0.0))) # 지도에서 목표지점 위치 알아내서 이곳에 넘겨야함
+        #self.target_pos = TargetPosition(self.target_point)
+        self.target_pos = TargetPosition(carla.Transform(carla.Location(-114.432091,56.850296,0.600000), carla.Rotation(0.0, -180.0, 0.0)))
         #self.target_pos.set_transform(random.choice(self.spawn_points))
 
         # create ego vehicle
@@ -466,13 +471,13 @@ class CarlaRlEnv(gym.Env):
         ego_vehicle_bp.set_attribute('role_name', 'lead_actor')
 
         self.ego_vehicle = None
-        # while self.ego_vehicle is None:
-        #    self.ego_vehicle = self.world.try_spawn_actor(ego_vehicle_bp,random.choice(self.spawn_points))
+        while self.ego_vehicle is None:
+            self.ego_vehicle = self.world.try_spawn_actor(ego_vehicle_bp, carla.Transform(carla.Location(-41.491478,111.945290,0.600000),carla.Rotation(0.0, -90.0, 0.0)))
         #    time.sleep(0.1)
 
-        while self.ego_vehicle is None:
-            self.ego_vehicle = self.world.try_spawn_actor(ego_vehicle_bp, self.start_point)
-            # time.sleep(0.1)
+        # while self.ego_vehicle is None:
+        #     self.ego_vehicle = self.world.try_spawn_actor(ego_vehicle_bp, self.start_point)
+        #     # time.sleep(0.1)
 
         self.vehicle_list.append(self.ego_vehicle)
         self.world.tick()
@@ -574,7 +579,7 @@ class CarlaRlEnv(gym.Env):
         transform = self.ego_vehicle.get_transform()
         transform.location.z += 50  # 10
         transform.rotation.pitch -= 90
-        self.spectator.set_transform(transform)
+        #self.spectator.set_transform(transform)
 
         # create other vehicles
         vehicle_bps = self.world.get_blueprint_library().filter('vehicle.*')
